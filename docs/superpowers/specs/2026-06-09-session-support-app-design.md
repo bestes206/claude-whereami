@@ -94,8 +94,10 @@ by seeking from the end, never parsing the whole transcript on each tick.
      **recent messages** (last few human turns) — filtering out tool-result
      entries and stripping injected `<system-reminder>` / CLAUDE.md / hook
      context blocks so the model scores real conversation, not harness noise.
-  3. Make one **Haiku** call (Anthropic SDK) scoring topic drift `0–100` plus a
-     one-line label.
+  3. Make one **Haiku** call by shelling out to the logged-in `claude` CLI
+     (`claude -p ... --model claude-haiku-4-5-20251001 --output-format json`) —
+     this rides on the user's Claude subscription, so **no API key / no
+     `anthropic` SDK**. Scores topic drift `0–100` plus a one-line label.
   4. Write `~/.claude/whereami/<session-id>.json`:
      `{ score, label, ts, msg_count, opening_goal }`.
 - **Must not block the turn:** the `Stop` hook should fire the Haiku call
@@ -124,7 +126,8 @@ by seeking from the end, never parsing the whole transcript on each tick.
 - a `Stop` hook invoking the drift sidecar
 
 Implementation language: **Python 3.9+** (avoid `X | Y` unions; use
-`Optional`/`Union`). Haiku via the Anthropic SDK.
+`Optional`/`Union`). Haiku via the logged-in `claude` CLI (subscription, no API
+key) — no `anthropic` SDK dependency.
 
 ## Cache schema
 

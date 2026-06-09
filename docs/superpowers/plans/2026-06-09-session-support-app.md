@@ -6,12 +6,13 @@
 
 **Architecture:** Three decoupled pieces sharing two small support modules. A **statusline renderer** reads the harness's stdin JSON payload + a cache file and prints one line (does no network I/O, fast). A **drift sidecar** runs from a `Stop` hook, increments a turn counter, and every 6th turn spawns a *detached* process that makes one Haiku call and writes the drift score to the cache. A **`/whereami` skill** is a read-only markdown skill for the on-demand rich view (self-cleaned by `Esc Esc`). Shared modules: `transcript.py` (parse JSONL → genuine human turns, strip injected harness noise, tail-from-end) and `cache.py` (per-session cache + throttle state).
 
-**Tech Stack:** Python 3.9+ (use `Optional`/`Tuple`/`List` from `typing`, no `X | Y` unions), `anthropic` SDK (Haiku 4.5 = `claude-haiku-4-5-20251001`), `pytest`. Packaged with `pyproject.toml` console scripts; configured via `.claude/settings.json`.
+**Tech Stack:** Python 3.9+ (use `Optional`/`Tuple`/`List`/`Callable` from `typing`, no `X | Y` unions), `pytest`. The drift call uses the **logged-in `claude` CLI** in headless mode (`claude -p ... --model claude-haiku-4-5-20251001 --output-format json`) — this rides on the user's Claude subscription, so **no `anthropic` SDK and no API key**. Packaged with `pyproject.toml` console scripts; configured via `.claude/settings.json`.
 
 **Prerequisites:**
 - Python 3.9+ and `python3 -m venv` available.
-- Tasks 1–9 and their tests need **no** API key — the Haiku call is mocked in every test.
-- Only the **live** end-to-end checks in Task 10 (Steps 4–5) actually call Haiku, which requires `ANTHROPIC_API_KEY` set in the environment. If you don't have one at build time, implement and unit-test everything, then leave Task 10 Steps 4–5 for the user to run.
+- The `claude` CLI on PATH and logged in (the same login used to run Claude Code). The drift sidecar shells out to it; no API key or `anthropic` account is needed.
+- Tasks 1–9 and their tests make **no** model call — `score_drift` takes an injectable `runner`, which the tests stub. Everything is fully offline.
+- Only the **live** end-to-end check in Task 10 (Step 5) actually invokes `claude -p`. It needs the CLI logged in (already true for anyone running this), not an API key.
 - All commands below assume the project root as the working directory and use the venv created in Task 1 (`.venv/bin/...`).
 
 ---
@@ -71,7 +72,7 @@ name = "whereami"
 version = "0.1.0"
 description = "In-session reorientation tool for Claude Code"
 requires-python = ">=3.9"
-dependencies = ["anthropic>=0.40"]
+dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
@@ -102,7 +103,7 @@ Run:
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 ```
-Expected: installs `whereami`, `anthropic`, `pytest` with no errors.
+Expected: installs `whereami` and `pytest` (no third-party runtime deps) with no errors.
 
 - [ ] **Step 4: Verify pytest runs (no tests yet)**
 
@@ -491,11 +492,14 @@ git commit -m "feat: tail-from-end and head transcript readers"
 
 ---
 
-## Task 5: Drift scoring via Haiku (mockable)
+## Task 5: Drift scoring via the `claude` CLI (subscription, mockable)
 
 **Files:**
 - Create: `src/whereami/drift.py`
 - Test: `tests/test_drift.py`
+
+The model call shells out to the logged-in `claude` CLI (no API key). It is
+injectable via a `runner` callable so tests run fully offline.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -504,43 +508,32 @@ git commit -m "feat: tail-from-end and head transcript readers"
 from whereami import drift
 
 
-class _FakeMessages:
-    def __init__(self, text):
-        self._text = text
-
-    def create(self, **kwargs):
-        class _Block:
-            type = "text"
-            text = self._text
-        class _Resp:
-            content = [_Block()]
-        return _Resp()
-
-
-class _FakeClient:
-    def __init__(self, text):
-        self.messages = _FakeMessages(text)
-
-
 def test_score_drift_parses_json():
-    client = _FakeClient('{"score": 72, "label": "drifted to deploy config"}')
-    score, label = drift.score_drift("build a parser", "fix the CI deploy", client=client)
+    score, label = drift.score_drift(
+        "build a parser", "fix the CI deploy",
+        runner=lambda prompt: '{"score": 72, "label": "drifted to deploy config"}')
     assert score == 72
     assert label == "drifted to deploy config"
 
 
-def test_score_drift_clamps_and_handles_junk():
-    client = _FakeClient("sorry I cannot help")
-    score, label = drift.score_drift("x", "y", client=client)
+def test_score_drift_handles_junk():
+    score, label = drift.score_drift("x", "y", runner=lambda prompt: "sorry I cannot help")
     assert score == 0
     assert label == ""
 
 
 def test_score_drift_clamps_out_of_range():
-    client = _FakeClient('{"score": 250, "label": "way off"}')
-    score, label = drift.score_drift("x", "y", client=client)
+    score, label = drift.score_drift(
+        "x", "y", runner=lambda prompt: '{"score": 250, "label": "way off"}')
     assert score == 100
     assert label == "way off"
+
+
+def test_score_drift_runner_failure_is_safe():
+    # a runner that returns '' (e.g. claude not found) must not raise
+    score, label = drift.score_drift("x", "y", runner=lambda prompt: "")
+    assert score == 0
+    assert label == ""
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -554,7 +547,8 @@ Expected: FAIL — `AttributeError: module 'whereami.drift' has no attribute 'sc
 # src/whereami/drift.py
 import json
 import re
-from typing import Optional, Tuple
+import subprocess
+from typing import Callable, Optional, Tuple
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
@@ -572,25 +566,26 @@ Reply with ONLY a JSON object, no prose:
 "label": "<3-6 word description of the current focus>"}}"""
 
 
-def _extract_text(resp) -> str:
-    parts = []
-    for block in getattr(resp, "content", []) or []:
-        if getattr(block, "type", None) == "text":
-            parts.append(getattr(block, "text", ""))
-    return "".join(parts)
+def _run_claude(prompt: str) -> str:
+    """Call Haiku via the logged-in `claude` CLI (uses the user's subscription,
+    no API key). Returns the model's text, or '' on any failure."""
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", prompt,
+             "--model", HAIKU_MODEL,
+             "--output-format", "json"],
+            capture_output=True, text=True, timeout=60,
+        )
+        envelope = json.loads(proc.stdout)
+        return envelope.get("result", "") or ""
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return ""
 
 
-def score_drift(goal: str, recent: str, client=None) -> Tuple[int, str]:
-    if client is None:
-        import anthropic
-        client = anthropic.Anthropic()
-    resp = client.messages.create(
-        model=HAIKU_MODEL,
-        max_tokens=200,
-        messages=[{"role": "user",
-                   "content": _PROMPT.format(goal=goal, recent=recent)}],
-    )
-    text = _extract_text(resp)
+def score_drift(goal: str, recent: str,
+                runner: Optional[Callable[[str], str]] = None) -> Tuple[int, str]:
+    run = runner or _run_claude
+    text = run(_PROMPT.format(goal=goal, recent=recent))
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         return 0, ""
@@ -610,13 +605,13 @@ def score_drift(goal: str, recent: str, client=None) -> Tuple[int, str]:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/bin/pytest tests/test_drift.py -v`
-Expected: PASS (3 passed)
+Expected: PASS (4 passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/whereami/drift.py tests/test_drift.py
-git commit -m "feat: Haiku drift scoring with defensive JSON parsing"
+git commit -m "feat: drift scoring via claude CLI (subscription, no API key)"
 ```
 
 ---
@@ -645,7 +640,7 @@ def test_compute_writes_score_and_counters(tmp_path, monkeypatch):
     ]) + "\n")
     cache.save_cache("s1", {"turns_seen": 6, "turns_at_last_compute": 0})
 
-    monkeypatch.setattr(drift, "score_drift", lambda g, r, client=None: (55, "on deploy"))
+    monkeypatch.setattr(drift, "score_drift", lambda g, r, runner=None: (55, "on deploy"))
     drift.compute("s1", str(p))
 
     out = cache.load_cache("s1")
@@ -692,7 +687,7 @@ def compute(session_id: str, transcript_path: str) -> None:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/bin/pytest tests/test_drift.py -v`
-Expected: PASS (4 passed)
+Expected: PASS (5 passed)
 
 - [ ] **Step 5: Commit**
 
@@ -812,7 +807,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/bin/pytest tests/test_drift.py -v`
-Expected: PASS (7 passed)
+Expected: PASS (8 passed)
 
 - [ ] **Step 5: Commit**
 
@@ -1120,11 +1115,13 @@ cat ~/.claude/whereami/verify.json
 ```
 Expected: hook exits 0; cache file shows `"turns_seen": 1`. (The detached compute will no-op because `/tmp/none.jsonl` has no turns — that is expected.)
 
-- [ ] **Step 5: Real end-to-end check** (requires `ANTHROPIC_API_KEY`)
+- [ ] **Step 5: Real end-to-end check** (requires the `claude` CLI logged in)
 
-This is the first step that makes a live Haiku call. Confirm a key is set
-(`echo "${ANTHROPIC_API_KEY:+present}"` should print `present`). If it is not
-available at build time, stop here and hand Steps 4–5 to the user.
+This is the first step that makes a live Haiku call via `claude -p` on your
+subscription. Confirm the CLI is available and authenticated
+(`claude -p 'reply with the word ok' --model claude-haiku-4-5-20251001`
+should print `ok`). If it is not available at build time, stop here and hand
+Step 5 to the user.
 
 Open a NEW Claude Code session in this project directory, exchange a few
 messages on a clear topic, then deliberately change topics. After the 6th
@@ -1157,4 +1154,4 @@ git commit -m "feat: wire statusline and Stop hook in settings.json"
 
 **Placeholder scan:** No TBD/TODO; every code step shows complete code; every test step shows full assertions. The only intentional template token is `<ABS>` in Task 10, with explicit instructions to resolve it in Step 1.
 
-**Type consistency:** `human_text` (Task 3) used by `last_human_text`/`opening_turns`/`recent_turns` (Task 4), all consumed by `compute` (Task 6) and `render`/`last_human_text` (Task 8). `score_drift(goal, recent, client=None)` signature consistent across Tasks 5–6. `cache.load_cache`/`save_cache` signatures consistent across Tasks 2, 6, 7, 8. Cache keys (`score`, `label`, `ts`, `opening_goal`, `turns_seen`, `turns_at_last_compute`) consistent across Tasks 6, 7, 8. `THROTTLE_TURNS = 6` matches the approved spec. ✅
+**Type consistency:** `human_text` (Task 3) used by `last_human_text`/`opening_turns`/`recent_turns` (Task 4), all consumed by `compute` (Task 6) and `render`/`last_human_text` (Task 8). `score_drift(goal, recent, runner=None)` signature consistent across Tasks 5–6 (tests inject `runner`). `cache.load_cache`/`save_cache` signatures consistent across Tasks 2, 6, 7, 8. Cache keys (`score`, `label`, `ts`, `opening_goal`, `turns_seen`, `turns_at_last_compute`) consistent across Tasks 6, 7, 8. `THROTTLE_TURNS = 6` matches the approved spec. ✅
