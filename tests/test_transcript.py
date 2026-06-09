@@ -47,3 +47,42 @@ def test_text_blocks_joined_and_tool_results_dropped():
         {"type": "text", "text": "do the thing"},
     ]}}
     assert transcript.human_text(entry) == "do the thing"
+
+
+def test_last_human_text_reads_from_end(tmp_path):
+    p = tmp_path / "t.jsonl"
+    lines = [
+        _line({"type": "user", "message": {"role": "user", "content": "first ask"}}),
+        _line({"type": "assistant", "message": {"role": "assistant", "content": "reply"}}),
+        _line({"type": "user", "message": {"role": "user",
+               "content": [{"type": "tool_result", "content": "tool output"}]}}),
+        _line({"type": "user", "message": {"role": "user", "content": "second ask"}}),
+        _line({"type": "assistant", "message": {"role": "assistant", "content": "reply2"}}),
+    ]
+    p.write_text("\n".join(lines) + "\n")
+    assert transcript.last_human_text(str(p)) == "second ask"
+
+
+def test_last_human_text_missing_file_returns_none():
+    assert transcript.last_human_text("/no/such/file.jsonl") is None
+
+
+def test_opening_turns_reads_from_start(tmp_path):
+    p = tmp_path / "t.jsonl"
+    lines = [
+        _line({"type": "user", "isMeta": True,
+               "message": {"role": "user", "content": "session start hook"}}),
+        _line({"type": "user", "message": {"role": "user", "content": "goal one"}}),
+        _line({"type": "assistant", "message": {"role": "assistant", "content": "ok"}}),
+        _line({"type": "user", "message": {"role": "user", "content": "goal two"}}),
+    ]
+    p.write_text("\n".join(lines) + "\n")
+    assert transcript.opening_turns(str(p), n=2) == ["goal one", "goal two"]
+
+
+def test_recent_turns_returns_last_n_human(tmp_path):
+    p = tmp_path / "t.jsonl"
+    lines = [_line({"type": "user", "message": {"role": "user", "content": f"ask {i}"}})
+             for i in range(10)]
+    p.write_text("\n".join(lines) + "\n")
+    assert transcript.recent_turns(str(p), n=3) == ["ask 7", "ask 8", "ask 9"]

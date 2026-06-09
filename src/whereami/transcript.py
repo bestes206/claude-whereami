@@ -34,3 +34,80 @@ def human_text(entry: dict) -> Optional[str]:
     msg = entry.get("message") or {}
     cleaned = _strip_injected(_content_text(msg.get("content")))
     return cleaned or None
+
+
+def _parse(line: str) -> Optional[dict]:
+    try:
+        return json.loads(line)
+    except ValueError:
+        return None
+
+
+def _tail_lines(path: str, max_lines: int = 200, block_size: int = 65536) -> List[str]:
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            data = b""
+            while size > 0 and data.count(b"\n") <= max_lines:
+                read = min(block_size, size)
+                size -= read
+                f.seek(size)
+                data = f.read(read) + data
+    except OSError:
+        return []
+    lines = [l for l in data.split(b"\n") if l.strip()]
+    return [l.decode("utf-8", "replace") for l in lines][-max_lines:]
+
+
+def _head_lines(path: str, max_lines: int = 200) -> List[str]:
+    out = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.strip():
+                    out.append(line)
+                if len(out) >= max_lines:
+                    break
+    except OSError:
+        return []
+    return out
+
+
+def last_human_text(path: str) -> Optional[str]:
+    for line in reversed(_tail_lines(path)):
+        entry = _parse(line)
+        if entry is None:
+            continue
+        text = human_text(entry)
+        if text:
+            return text
+    return None
+
+
+def opening_turns(path: str, n: int = 2) -> List[str]:
+    out = []
+    for line in _head_lines(path):
+        entry = _parse(line)
+        if entry is None:
+            continue
+        text = human_text(entry)
+        if text:
+            out.append(text)
+        if len(out) >= n:
+            break
+    return out
+
+
+def recent_turns(path: str, n: int = 4) -> List[str]:
+    out = []
+    for line in reversed(_tail_lines(path)):
+        entry = _parse(line)
+        if entry is None:
+            continue
+        text = human_text(entry)
+        if text:
+            out.append(text)
+        if len(out) >= n:
+            break
+    return list(reversed(out))
