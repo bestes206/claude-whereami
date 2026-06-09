@@ -45,14 +45,30 @@ def fmt_duration(ms: int) -> str:
 
 
 def context_pct(data: dict) -> Optional[int]:
-    """Return context-window fill % if the harness payload exposes it; else None.
-    Version-dependent — we never reverse-engineer it from the transcript."""
-    ctx = data.get("context")
-    if isinstance(ctx, dict):
-        for key in ("used_pct", "percent", "used_percent"):
-            val = ctx.get(key)
-            if isinstance(val, (int, float)):
-                return int(val)
+    """Return context-window fill % from the harness payload, or None if absent.
+    Prefers the pre-computed `context_window.used_percentage`; otherwise derives
+    it from the input/cache token counts vs the window size. We read only the
+    payload — never reverse-engineer it from the transcript."""
+    cw = data.get("context_window")
+    if not isinstance(cw, dict):
+        return None
+    val = cw.get("used_percentage")
+    if isinstance(val, (int, float)):
+        return int(round(val))
+    size = cw.get("context_window_size")
+    usage = cw.get("current_usage")
+    used = 0
+    if isinstance(usage, dict):
+        for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
+            tok = usage.get(key)
+            if isinstance(tok, (int, float)):
+                used += tok
+    if not used:
+        total_in = cw.get("total_input_tokens")
+        if isinstance(total_in, (int, float)):
+            used = total_in
+    if used and isinstance(size, (int, float)) and size > 0:
+        return int(round(used / size * 100))
     return None
 
 
@@ -74,7 +90,7 @@ def render(data: dict) -> str:
 
     pct = context_pct(data)
     if pct is not None:
-        segs.append("\U0001f522 {}%".format(pct))
+        segs.append("ctx {}%".format(pct))
 
     if os.environ.get("WHEREAMI_SHOW_COST"):
         usd = cost.get("total_cost_usd")

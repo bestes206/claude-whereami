@@ -38,6 +38,30 @@ def test_render_includes_light_and_last_said(tmp_path, monkeypatch):
     assert "2m" in line
 
 
+def test_context_pct_from_payload():
+    assert statusline.context_pct({"context_window": {"used_percentage": 8}}) == 8
+    assert statusline.context_pct({"context_window": {"used_percentage": 8.6}}) == 9
+    assert statusline.context_pct({}) is None
+    assert statusline.context_pct({"context_window": {}}) is None
+
+
+def test_context_pct_derived_from_tokens():
+    data = {"context_window": {
+        "context_window_size": 200000,
+        "current_usage": {"input_tokens": 10000, "cache_read_input_tokens": 10000},
+    }}
+    assert statusline.context_pct(data) == 10
+
+
+def test_render_includes_context_pct(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    line = statusline.render({
+        "session_id": "s1", "transcript_path": str(tmp_path / "none.jsonl"),
+        "context_window": {"used_percentage": 42},
+    })
+    assert "ctx 42%" in line
+
+
 def test_render_omits_cost_by_default(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     monkeypatch.delenv("WHEREAMI_SHOW_COST", raising=False)
