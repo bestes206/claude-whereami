@@ -86,7 +86,7 @@ by seeking from the end, never parsing the whole transcript on each tick.
 - **Trigger:** a `Stop` hook, which fires only when the agent finishes a turn.
   An idle session produces no events, so there is never an idle ping.
 - **Throttle:** message-count only (no timer). Recompute every **N assistant
-  turns** (default **4**). State (turn count at last compute) is tracked in the
+  turns** (default **6**). State (turn count at last compute) is tracked in the
   cache file.
 - **On run:**
   1. Read the transcript JSONL.
@@ -183,7 +183,7 @@ Implementation language: **Python 3.9+** (avoid `X | Y` unions; use
 
 ## Open / deferred tuning
 
-- Exact throttle N (default 4) — adjust live.
+- Exact throttle N (default 6) — adjust live.
 - Whether the installed CC version exposes context-window fill in the statusline
   payload — verify during implementation; do not overpromise.
 - Light thresholds — adjust after real use.
