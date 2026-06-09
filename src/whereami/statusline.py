@@ -7,14 +7,25 @@ from typing import Optional
 from . import cache, transcript
 
 
-def light_emoji(score: Optional[int]) -> str:
+# ANSI-colored text-width dot (U+25CF). Carries the coherence signal by color
+# rather than an emoji, so it stays the same size/weight as the rest of the line.
+_RESET = "\033[0m"
+_GREEN = "\033[32m"
+_AMBER = "\033[33m"
+_RED = "\033[31m"
+_DIM = "\033[90m"  # bright-black / grey: no data yet
+
+
+def light(score: Optional[int]) -> str:
     if score is None:
-        return "⚪"  # white circle: no data yet
-    if score <= 33:
-        return "\U0001f7e2"  # green
-    if score <= 66:
-        return "\U0001f7e1"  # amber
-    return "\U0001f534"      # red
+        color = _DIM
+    elif score <= 33:
+        color = _GREEN
+    elif score <= 66:
+        color = _AMBER
+    else:
+        color = _RED
+    return color + "●" + _RESET
 
 
 def truncate(text: str, limit: int) -> str:
@@ -50,7 +61,7 @@ def render(data: dict) -> str:
     transcript_path = data.get("transcript_path", "")
     cached = cache.load_cache(session_id)
 
-    segs = [light_emoji(cached.get("score"))]
+    segs = [light(cached.get("score"))]
 
     last = transcript.last_human_text(transcript_path) if transcript_path else None
     if last:

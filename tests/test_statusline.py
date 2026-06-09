@@ -3,10 +3,11 @@ from whereami import statusline, cache
 
 
 def test_light_buckets():
-    assert statusline.light_emoji(None) == "⚪"   # no data
-    assert statusline.light_emoji(10) == "\U0001f7e2"  # green
-    assert statusline.light_emoji(50) == "\U0001f7e1"  # amber
-    assert statusline.light_emoji(90) == "\U0001f534"  # red
+    # color carried by ANSI escape; glyph is a text-width dot, not an emoji
+    assert statusline.light(None) == "\033[90m●\033[0m"   # dim grey: no data
+    assert statusline.light(10) == "\033[32m●\033[0m"     # green
+    assert statusline.light(50) == "\033[33m●\033[0m"     # amber
+    assert statusline.light(90) == "\033[31m●\033[0m"     # red
 
 
 def test_fmt_duration():
@@ -32,7 +33,7 @@ def test_render_includes_light_and_last_said(tmp_path, monkeypatch):
         "transcript_path": str(p),
         "cost": {"total_duration_ms": 125_000, "total_cost_usd": 0.0},
     })
-    assert "\U0001f534" in line          # red light from score 80
+    assert "\033[31m●\033[0m" in line    # red light from score 80
     assert "what did I ask" in line
     assert "2m" in line
 
