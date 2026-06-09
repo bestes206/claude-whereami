@@ -53,3 +53,28 @@ def score_drift(goal: str, recent: str,
     score = max(0, min(100, score))
     label = str(data.get("label", "")).strip()
     return score, label
+
+
+# src/whereami/drift.py  (append)
+from datetime import datetime
+
+from . import cache, transcript
+
+
+def _now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def compute(session_id: str, transcript_path: str) -> None:
+    data = cache.load_cache(session_id)
+    goal = data.get("opening_goal") or "\n".join(transcript.opening_turns(transcript_path))
+    recent = "\n".join(transcript.recent_turns(transcript_path))
+    if not goal or not recent:
+        return
+    score, label = score_drift(goal, recent)
+    data["score"] = score
+    data["label"] = label
+    data["opening_goal"] = goal
+    data["ts"] = _now_iso()
+    data["turns_at_last_compute"] = data.get("turns_seen", 0)
+    cache.save_cache(session_id, data)
