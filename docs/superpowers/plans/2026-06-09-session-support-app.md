@@ -8,6 +8,12 @@
 
 **Tech Stack:** Python 3.9+ (use `Optional`/`Tuple`/`List` from `typing`, no `X | Y` unions), `anthropic` SDK (Haiku 4.5 = `claude-haiku-4-5-20251001`), `pytest`. Packaged with `pyproject.toml` console scripts; configured via `.claude/settings.json`.
 
+**Prerequisites:**
+- Python 3.9+ and `python3 -m venv` available.
+- Tasks 1–9 and their tests need **no** API key — the Haiku call is mocked in every test.
+- Only the **live** end-to-end checks in Task 10 (Steps 4–5) actually call Haiku, which requires `ANTHROPIC_API_KEY` set in the environment. If you don't have one at build time, implement and unit-test everything, then leave Task 10 Steps 4–5 for the user to run.
+- All commands below assume the project root as the working directory and use the venv created in Task 1 (`.venv/bin/...`).
+
 ---
 
 ## File Structure
@@ -1114,7 +1120,11 @@ cat ~/.claude/whereami/verify.json
 ```
 Expected: hook exits 0; cache file shows `"turns_seen": 1`. (The detached compute will no-op because `/tmp/none.jsonl` has no turns — that is expected.)
 
-- [ ] **Step 5: Real end-to-end check**
+- [ ] **Step 5: Real end-to-end check** (requires `ANTHROPIC_API_KEY`)
+
+This is the first step that makes a live Haiku call. Confirm a key is set
+(`echo "${ANTHROPIC_API_KEY:+present}"` should print `present`). If it is not
+available at build time, stop here and hand Steps 4–5 to the user.
 
 Open a NEW Claude Code session in this project directory, exchange a few
 messages on a clear topic, then deliberately change topics. After the 6th
