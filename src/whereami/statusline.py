@@ -90,7 +90,8 @@ def render(data: dict) -> str:
 
     pct = context_pct(data)
     if pct is not None:
-        segs.append("ctx {}%".format(pct))
+        # bare percent — it's the only % on the line, so no label needed
+        segs.append("{}%".format(pct))
 
     if os.environ.get("WHEREAMI_SHOW_COST"):
         usd = cost.get("total_cost_usd")
