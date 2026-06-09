@@ -78,3 +78,49 @@ def compute(session_id: str, transcript_path: str) -> None:
     data["ts"] = _now_iso()
     data["turns_at_last_compute"] = data.get("turns_seen", 0)
     cache.save_cache(session_id, data)
+
+
+# src/whereami/drift.py  (append)
+import os
+import subprocess
+import sys
+
+THROTTLE_TURNS = 6
+
+
+def _spawn_compute(session_id: str, transcript_path: str) -> None:
+    subprocess.Popen(
+        [sys.executable, "-m", "whereami.drift", "--compute", session_id, transcript_path],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def run_hook() -> None:
+    try:
+        payload = json.load(sys.stdin)
+    except ValueError:
+        sys.exit(0)
+    session_id = payload.get("session_id")
+    transcript_path = payload.get("transcript_path")
+    if not session_id or not transcript_path:
+        sys.exit(0)
+
+    data = cache.load_cache(session_id)
+    data["turns_seen"] = data.get("turns_seen", 0) + 1
+    cache.save_cache(session_id, data)
+
+    due = (not data.get("ts")) or (
+        data["turns_seen"] - data.get("turns_at_last_compute", 0) >= THROTTLE_TURNS
+    )
+    if due:
+        _spawn_compute(session_id, transcript_path)
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 4 and sys.argv[1] == "--compute":
+        compute(sys.argv[2], sys.argv[3])
+    else:
+        run_hook()
