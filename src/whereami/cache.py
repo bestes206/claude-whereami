@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Dict
 
@@ -21,7 +22,19 @@ def load_cache(session_id: str) -> Dict:
 
 def save_cache(session_id: str, data: Dict) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = _path(session_id).with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    os.replace(tmp, _path(session_id))
+    target = _path(session_id)
+    # Unique temp file per writer: concurrent Stop hooks / a detached compute
+    # can write the same session at once, and a shared temp name would make
+    # os.replace fail for the loser. mkstemp guarantees a private name; the
+    # os.replace onto the final path stays atomic (last write wins).
+    fd, tmp = tempfile.mkstemp(dir=str(CACHE_DIR), prefix=target.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
