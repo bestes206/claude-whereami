@@ -1,0 +1,18 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "/Users/bryan/Playground/session-support-app/.venv/bin/whereami-statusline"
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/bryan/Playground/session-support-app/.venv/bin/whereami-hook"
+          }
+        ]
+      }
+    ]
+  }
+}
