@@ -1,6 +1,9 @@
 import json
 import re
+from datetime import datetime
 from typing import Callable, List, Optional
+
+from . import cache
 
 _REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 _COMMAND_RE = re.compile(r"<command-[a-z]+>.*?</command-[a-z]+>", re.DOTALL)
@@ -131,3 +134,24 @@ def recent_turns(path: str, n: int = 4) -> List[str]:
         if len(out) >= n:
             break
     return list(reversed(out))
+
+
+def human_turn_timestamps(path: str, n: int = 2) -> List[datetime]:
+    """Timestamps of the last `n` genuine human turns, most-recent-first. Pairs
+    each human turn (filtered via human_text — NOT type=='user', which is mostly
+    tool_result envelopes) with its `timestamp`, Z-normalized. Skips turns with
+    missing/garbage timestamps."""
+    out = []  # type: List[datetime]
+    for line in reversed(_tail_lines(path)):
+        entry = _parse(line)
+        if entry is None:
+            continue
+        if human_text(entry) is None:
+            continue
+        ts = cache.parse_iso(entry.get("timestamp"))
+        if ts is None:
+            continue
+        out.append(ts)
+        if len(out) >= n:
+            break
+    return out
