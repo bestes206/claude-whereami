@@ -1,0 +1,14 @@
+{
+  "name": "claude-whereami",
+  "description": "whereami — live in-session orientation for the Claude Code statusline.",
+  "owner": {
+    "name": "Bryan Estes"
+  },
+  "plugins": [
+    {
+      "name": "whereami",
+      "source": "./",
+      "description": "Live in-session orientation in the Claude Code statusline: what the session is doing now vs. its original goal, drift, the open loop — plus a hotkey peek panel. Zero context cost."
+    }
+  ]
+}

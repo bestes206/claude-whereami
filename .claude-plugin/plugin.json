@@ -1,0 +1,17 @@
+{
+  "name": "whereami",
+  "version": "0.2.0",
+  "description": "Live in-session orientation in the Claude Code statusline: what the session is doing now vs. its original goal, drift, the open loop — plus a hotkey peek panel. Zero context cost.",
+  "author": {
+    "name": "Bryan Estes"
+  },
+  "repository": "https://github.com/bestes206/claude-whereami",
+  "license": "MIT",
+  "keywords": [
+    "statusline",
+    "orientation",
+    "drift",
+    "session",
+    "claude-code"
+  ]
+}
