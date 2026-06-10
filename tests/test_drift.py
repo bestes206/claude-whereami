@@ -251,6 +251,23 @@ def test_hook_spawns_when_no_cache(tmp_path, monkeypatch):
     assert len(spawned) == 1   # no ts → due immediately
 
 
+def test_run_claude_tolerates_shape_changed_envelope(monkeypatch):
+    # Risk E: the -p JSON envelope is an undocumented contract. A shape
+    # change must degrade to "" (→ parse failure → last_failure_ts →
+    # backoff), never raise out of the compute child.
+    class FakeProc:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    for stdout in ("[1, 2]",                    # non-dict envelope
+                   "null",
+                   '{"result": {"score": 5}}',  # non-str result
+                   '{"result": null}'):
+        monkeypatch.setattr(drift.subprocess, "run",
+                            lambda *a, stdout=stdout, **k: FakeProc(stdout))
+        assert drift._run_claude("prompt") == ""
+
+
 def test_hook_exits_cleanly_on_non_object_payload(tmp_path, monkeypatch):
     # `null`/lists are valid JSON, so the ValueError guard doesn't fire;
     # the hook must exit 0 silently, as statusline.main survives the same.

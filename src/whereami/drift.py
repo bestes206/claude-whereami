@@ -32,7 +32,10 @@ def _run_claude(prompt: str) -> str:
             capture_output=True, text=True, timeout=CLI_TIMEOUT,
         )
         envelope = json.loads(proc.stdout)
-        return envelope.get("result", "") or ""
+        if not isinstance(envelope, dict):
+            return ""   # shape-changed envelope (risk E): degrade, never raise
+        result = envelope.get("result", "")
+        return result if isinstance(result, str) else ""
     except (OSError, ValueError, subprocess.SubprocessError):
         return ""
 
