@@ -269,6 +269,15 @@ def test_peek_message_wraps_to_four_lines_with_ellipsis(tmp_path, monkeypatch):
     assert all(len(l) <= 100 for l in msg_lines)
 
 
+def test_wrap_message_exact_ceiling_boundary():
+    # A width wider than the ceiling isolates the char limit from the line cap.
+    wide = statusline.PEEK_MSG_LIMIT + 10
+    exact = "x" * statusline.PEEK_MSG_LIMIT
+    assert statusline.wrap_message(exact, wide) == ["❯ " + exact]
+    over = "x" * (statusline.PEEK_MSG_LIMIT + 1)
+    assert statusline.wrap_message(over, wide) == ["❯ " + exact + "…"]
+
+
 def test_peek_no_cache_degraded_panel(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     now = 10_000.0
