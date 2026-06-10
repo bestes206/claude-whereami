@@ -129,11 +129,8 @@ def in_failure_backoff(data: Dict, now: float) -> bool:
     """True while last_failure_ts is newer than ts AND younger than
     FAILURE_BACKOFF. Without this, a persistent parse failure (which never
     advances ts) would burn one rate-limit call per turn, forever."""
-    fail = cache.ts_to_epoch(data.get("last_failure_ts"))
+    fail = cache.failure_epoch(data)
     if fail is None:
-        return False
-    ts = cache.ts_to_epoch(data.get("ts"))
-    if ts is not None and ts >= fail:
         return False
     # Lower clamp as in peek_active: a future-dated timestamp (clock step,
     # mangled hand edit) must be inert, not a spawn freeze until it passes.

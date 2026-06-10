@@ -175,11 +175,8 @@ def staleness_segment(cached: dict, now: float) -> str:
 
 
 def failure_segment(cached: dict, now: float) -> Optional[str]:
-    fail = cache.ts_to_epoch(cached.get("last_failure_ts"))
+    fail = cache.failure_epoch(cached)
     if fail is None:
-        return None
-    ts = cache.ts_to_epoch(cached.get("ts"))
-    if ts is not None and ts >= fail:
         return None
     return "last compute failed {} ago".format(fmt_ago(now - fail))
 

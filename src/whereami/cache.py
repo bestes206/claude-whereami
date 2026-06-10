@@ -38,6 +38,21 @@ def ts_to_epoch(value) -> Optional[float]:
         return None
 
 
+def failure_epoch(data: Dict) -> Optional[float]:
+    """Epoch of an UNHEALED parse failure: last_failure_ts when it is newer
+    than ts, else None (a success at or after the failure clears it). The
+    single definition behind both the spawn backoff and the peek failure
+    badge — the badge is the backoff's only observability, so the two must
+    never diverge."""
+    fail = ts_to_epoch(data.get("last_failure_ts"))
+    if fail is None:
+        return None
+    ts = ts_to_epoch(data.get("ts"))
+    if ts is not None and ts >= fail:
+        return None
+    return fail
+
+
 def turns_at_last_compute(data: Dict) -> int:
     """The cache's turns_at_last_compute as an int; the file is hand-editable,
     so a missing/garbage/bool counter reads as 0 — degrade, never raise."""
