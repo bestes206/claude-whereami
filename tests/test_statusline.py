@@ -252,11 +252,47 @@ def test_peek_full_panel_golden(tmp_path, monkeypatch):
         "context_window": {"used_percentage": 63},
     }, now=now)
     lines = out.split("\n")
-    assert lines[0] == (AMBER + "drift 58 · CI retry backoff logic" + RESET
+    assert lines[0] == (AMBER + "drifting · CI retry backoff logic" + RESET
                         + "  " + DIM + "(goal: in-session reorientation tool)" + RESET)
     assert lines[1] == "❯ ok now make the retry logic exponential"
     assert lines[2] == "⊙ your turn: choose a backoff strategy"
     assert lines[3] == "⏱ 42m · ⊠ 63% · scored 4m ago"
+
+
+def test_drift_label_bands():
+    # 4-band friendly spectrum, aligned to the green/amber/red color buckets;
+    # the top band lines up with the split? threshold (85).
+    assert statusline.drift_label(0) == "on track"
+    assert statusline.drift_label(33) == "on track"
+    assert statusline.drift_label(34) == "drifting"
+    assert statusline.drift_label(66) == "drifting"
+    assert statusline.drift_label(67) == "off track"
+    assert statusline.drift_label(84) == "off track"
+    assert statusline.drift_label(85) == "way off"
+    assert statusline.drift_label(100) == "way off"
+
+
+def test_peek_headline_shows_label_not_raw_number(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 58, "gist": "CI retry backoff logic",
+                            "ts": _iso(now - 60), "turns_at_last_compute": 0})
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    assert out.split("\n")[0] == AMBER + "drifting · CI retry backoff logic" + RESET
+    assert "drift 58" not in out   # the decoder-ring number is gone by default
+
+
+def test_peek_show_drift_score_env_appends_number(tmp_path, monkeypatch):
+    # Power users tuning thresholds opt the raw number back in, like SHOW_COST.
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setenv("WHEREAMI_SHOW_DRIFT_SCORE", "1")
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 70, "gist": "totally different work",
+                            "ts": _iso(now - 60), "turns_at_last_compute": 0})
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    assert out.split("\n")[0] == RED + "off track (70) · totally different work" + RESET
 
 
 def test_peek_open_loop_dim_when_stale_omitted_when_empty(tmp_path, monkeypatch):

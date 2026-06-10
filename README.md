@@ -21,15 +21,15 @@ parser retry logic · ⏱ 42m · ⊠ 63%
 ```
 
 Line 1 is the *gist* — a few words describing what the session is doing right
-now, colored by drift (green: on track, amber: wandering, red: far from the
-original goal) — plus elapsed time and context usage. Line 2 is your own last
+now, colored by drift (green: on track, amber: drifting, red: off track) —
+plus elapsed time and context usage. Line 2 is your own last
 message, live from the transcript.
 
 **Peek mode** — press a hotkey and the statusline expands into a full
 orientation panel for ~30 seconds, then collapses on its own:
 
 ```
-drift 58 · CI retry backoff logic   (goal: in-session reorientation tool)
+drifting · CI retry backoff logic   (goal: in-session reorientation tool)
 ❯ ok now let's make the retry logic exponential with jitter and cap it
   at 5 attempts, and while you're in there rename the helper
 ⊙ your turn: choose a backoff strategy
@@ -39,11 +39,12 @@ drift 58 · CI retry backoff logic   (goal: in-session reorientation tool)
 <!-- TODO: replace the mocks above with a real screenshot:
      ![whereami in a live session](docs/screenshot.png) -->
 
-The panel adds the drift score, the distilled original goal, your last
-message near-full, the *open loop* (`⊙ your turn:` — what the agent is
-waiting on from you), honest time-based staleness, and — when drift and
-context pressure are both high — a `· split?` hint that it's time for a
-fresh session.
+The panel leads with a plain-language drift label — `on track` → `drifting`
+→ `off track` → `way off` (set `WHEREAMI_SHOW_DRIFT_SCORE=1` to append the raw
+0–100 number) — then the distilled original goal, your last message near-full,
+the *open loop* (`⊙ your turn:` — what the agent is waiting on from you), honest
+time-based staleness, and — when drift and context pressure are both high — a
+`· split?` hint that it's time for a fresh session.
 
 A bundled read-only `/whereami` skill remains for the deep view: the model's
 own in-context summary of the session, designed to be `Esc Esc`-rewound away

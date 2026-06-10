@@ -80,6 +80,19 @@ def _color_for(score: int) -> str:
     return _RED
 
 
+def drift_label(score: int) -> str:
+    """A plain-language band for the drift score — no decoder ring. Four levels
+    aligned to the color buckets; the top band lines up with the split? threshold
+    (SPLIT_SCORE = 85), so "way off" and "time to split" coincide."""
+    if score <= 33:
+        return "on track"
+    if score <= 66:
+        return "drifting"
+    if score <= 84:
+        return "off track"
+    return "way off"
+
+
 # Terminal-active bytes in rendered text: whole CSI/OSC sequences (pasted
 # shell logs, prompt-injected model fields via JSON \u escapes), then any
 # bare control byte. Whitespace-class bytes (\t\n\v\f\r, \x1c-\x1f, \x85)
@@ -248,7 +261,10 @@ def render_peek(data: dict, cached: dict, last: Optional[str],
     gist = _clean(cached.get("gist"))
     scored = score is not None and bool(gist)
     if scored:
-        head = _color_for(score) + "drift {} · {}".format(score, gist) + _RESET
+        label = drift_label(score)
+        if os.environ.get("WHEREAMI_SHOW_DRIFT_SCORE"):
+            label = "{} ({})".format(label, score)
+        head = _color_for(score) + "{} · {}".format(label, gist) + _RESET
         goal = truncate(_clean(cached.get("goal")) or _clean(cached.get("opening_goal")),
                         GOAL_PAREN_LIMIT)
         if goal:
