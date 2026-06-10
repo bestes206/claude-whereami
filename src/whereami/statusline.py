@@ -2,9 +2,7 @@
 import json
 import math
 import os
-import shutil
 import sys
-import textwrap
 import time
 from typing import List, Optional
 
@@ -191,6 +189,8 @@ def split_hint(cached: dict, ctx_pct: Optional[int]) -> bool:
 
 
 def _peek_width() -> int:
+    import shutil  # lazy: peek-only, off the every-3s render path
+
     # The renderer has no tty: get_terminal_size falls back to COLUMNS, else 80.
     return min(shutil.get_terminal_size((80, 24)).columns, PEEK_WRAP_MAX)
 
@@ -198,6 +198,8 @@ def _peek_width() -> int:
 def wrap_message(text: str, width: int) -> List[str]:
     """Head-keep to PEEK_MSG_LIMIT, wrap, cap at PEEK_MSG_MAX_LINES; any
     truncation ends the visible text with an ellipsis."""
+    import textwrap  # lazy: peek-only, off the every-3s render path
+
     collapsed = _collapse(text)
     truncated = len(collapsed) > PEEK_MSG_LIMIT
     body = collapsed[:PEEK_MSG_LIMIT]
