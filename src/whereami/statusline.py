@@ -253,6 +253,18 @@ def render_peek(data: dict, cached: dict, last: Optional[str],
     return "\n".join(lines)
 
 
+def _maybe_recompute(session_id: str, transcript_path: str,
+                     cached: dict, turns: int) -> None:
+    """The renderer's only write path (via the shared spawn guard). Entirely
+    exception-swallowed: rendering must never break."""
+    try:
+        if turns > cached.get("turns_at_last_compute", 0) or not cached.get("gist"):
+            from . import drift   # lazy: keep normal-mode startup fast
+            drift.maybe_spawn_compute(session_id, transcript_path)
+    except BaseException:
+        pass
+
+
 def render(data: dict, now: Optional[float] = None) -> str:
     now = time.time() if now is None else now
     session_id = data.get("session_id", "")
@@ -261,6 +273,8 @@ def render(data: dict, now: Optional[float] = None) -> str:
     last = transcript.last_human_text(transcript_path) if transcript_path else None
     if peek_active(now):
         turns = cache.load_turns(session_id)
+        if session_id and transcript_path:
+            _maybe_recompute(session_id, transcript_path, cached, turns)
         return render_peek(data, cached, last, turns, now)
     return render_normal(data, cached, last)
 

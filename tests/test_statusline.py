@@ -358,3 +358,103 @@ def test_peek_cached_goal_truncated(tmp_path, monkeypatch):
                             "goal": "G" * 80, "ts": _iso(now - 60)})
     out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
     assert "(goal: " + "G" * 39 + "…)" in out
+
+
+# ---------------------------------------------------------------------------
+# Task 8: renderer-side recompute trigger
+# ---------------------------------------------------------------------------
+
+def _patch_spawn(monkeypatch, calls):
+    from whereami import drift
+    monkeypatch.setattr(drift, "maybe_spawn_compute",
+                        lambda sid, path, now=None, spawner=None: calls.append(sid))
+
+
+def test_peek_triggers_recompute_when_turns_advanced(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    calls = []
+    _patch_spawn(monkeypatch, calls)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 10, "gist": "parser work",
+                            "ts": _iso(now - 60), "turns_at_last_compute": 6})
+    cache.save_turns("s1", 8)   # turn-delta arm
+    statusline.render({"session_id": "s1", "transcript_path": "/t"}, now=now)
+    assert calls == ["s1"]
+
+
+def test_peek_triggers_recompute_when_gist_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    calls = []
+    _patch_spawn(monkeypatch, calls)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 42, "label": "v1", "ts": _iso(now - 60),
+                            "turns_at_last_compute": 6})
+    cache.save_turns("s1", 6)   # no turn delta — the gist arm alone must fire
+    statusline.render({"session_id": "s1", "transcript_path": "/t"}, now=now)
+    assert calls == ["s1"]
+
+
+def test_peek_no_recompute_when_fresh(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    calls = []
+    _patch_spawn(monkeypatch, calls)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 10, "gist": "parser work",
+                            "ts": _iso(now - 60), "turns_at_last_compute": 6})
+    cache.save_turns("s1", 6)
+    statusline.render({"session_id": "s1", "transcript_path": "/t"}, now=now)
+    assert calls == []
+
+
+def test_no_recompute_in_normal_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    calls = []
+    _patch_spawn(monkeypatch, calls)
+    cache.save_turns("s1", 8)   # stale, but no peek file → never spawn
+    statusline.render({"session_id": "s1", "transcript_path": "/t"})
+    assert calls == []
+
+
+def test_render_survives_spawn_path_exception(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    from whereami import drift
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("marker create failed")
+
+    monkeypatch.setattr(drift, "maybe_spawn_compute", boom)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_turns("s1", 3)
+    out = statusline.render({"session_id": "s1", "transcript_path": "/t"}, now=now)
+    assert isinstance(out, str) and out   # render still returned a panel
+
+
+def test_held_peek_no_goal_session_spawns_each_tick_no_llm(tmp_path, monkeypatch):
+    # Pins the spec's accepted residual: a no-goal session early-returns
+    # (unlinking the marker), so a held-open peek re-spawns once per refresh
+    # tick — with ZERO LLM calls (the early return precedes the model call).
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    from whereami import drift
+    p = tmp_path / "empty.jsonl"
+    p.write_text("")
+    llm_calls = []
+    monkeypatch.setattr(drift, "_run_claude",
+                        lambda prompt: llm_calls.append(prompt) or "")
+    spawns = []
+
+    def sync_spawn(sid, path):
+        spawns.append(sid)
+        drift._compute_entry(sid, path)   # run the detached child inline
+
+    monkeypatch.setattr(drift, "_spawn_compute", sync_spawn)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    for tick in range(3):
+        statusline.render({"session_id": "s1", "transcript_path": str(p)},
+                          now=now + tick * 3)
+    assert spawns == ["s1", "s1", "s1"]   # one spawn per tick
+    assert llm_calls == []                # zero LLM calls
