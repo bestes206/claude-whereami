@@ -273,10 +273,13 @@ def parse_orientation(text: str, want_goal: bool) -> Optional[Dict]:
         return None
     if not isinstance(data, dict):
         return None
+    raw_score = data.get("score")
+    if isinstance(raw_score, bool):
+        return None   # int(True) == 1: a near-best score, not a parse success
     try:
-        score = int(data.get("score"))
-    except (TypeError, ValueError):
-        return None
+        score = int(raw_score)
+    except (TypeError, ValueError, OverflowError):
+        return None   # OverflowError: json.loads accepts Infinity
     gist = data.get("gist")
     if not isinstance(gist, str) or not gist.strip():
         return None

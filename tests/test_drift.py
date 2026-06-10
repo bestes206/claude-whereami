@@ -251,6 +251,18 @@ def test_hook_spawns_when_no_cache(tmp_path, monkeypatch):
     assert len(spawned) == 1   # no ts → due immediately
 
 
+def test_orient_bool_or_infinite_score_is_parse_failure():
+    # int(True) == 1 would cache "yes, drifted" as a near-best score; and
+    # json.loads accepts Infinity, where int() raises OverflowError — both
+    # must be parse failures, not crashes or inverted signals.
+    assert drift.orient("g", "r", "t", None, False,
+                        runner=lambda p: '{"score": true, "gist": "auth work"}') is None
+    assert drift.orient("g", "r", "t", None, False,
+                        runner=lambda p: '{"score": Infinity, "gist": "auth work"}') is None
+    assert drift.orient("g", "r", "t", None, False,
+                        runner=lambda p: '{"score": NaN, "gist": "auth work"}') is None
+
+
 def test_run_claude_tolerates_shape_changed_envelope(monkeypatch):
     # Risk E: the -p JSON envelope is an undocumented contract. A shape
     # change must degrade to "" (→ parse failure → last_failure_ts →
