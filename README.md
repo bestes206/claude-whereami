@@ -43,8 +43,9 @@ The panel leads with a plain-language drift label — `on track` → `drifting`
 → `off track` → `way off` (set `WHEREAMI_SHOW_DRIFT_SCORE=1` to append the raw
 0–100 number) — then the distilled original goal, your last message near-full,
 the *open loop* (`⊙ your turn:` — what the agent is waiting on from you), honest
-time-based staleness, and — when drift and context pressure are both high — a
-`· split?` hint that it's time for a fresh session.
+time-based staleness (with a `· scoring…` flag while a fresh score is being
+computed, so you know an update is on the way), and — when drift and context
+pressure are both high — a `· split?` hint that it's time for a fresh session.
 
 A bundled read-only `/whereami` skill remains for the deep view: the model's
 own in-context summary of the session, designed to be `Esc Esc`-rewound away
@@ -95,8 +96,9 @@ That one command does the rest:
 
 - **Statusline** — wires it into `~/.claude/settings.json` (backing the file up
   first, and refusing to clobber a non-whereami statusline unless you pass
-  `--force`). It sets `refreshInterval: 3`, the timer that lets the peek panel
-  appear and collapse while a session is idle.
+  `--force`). It sets `refreshInterval: 1`, the poll timer that lets the peek
+  panel appear promptly on the hotkey and collapse on its own — the render is a
+  cheap read-only path, so polling once a second is comfortably affordable.
 - **Stop hook** — wired automatically (and skipped for plugin installs, which
   already get it from the bundled hooks, so it never double-fires).
 - **Peek hotkey (⌥W)** — auto-detects **Hammerspoon** or **Raycast** and wires
@@ -129,11 +131,16 @@ statusline renderer ◀──reads cache + transcript tail, no network───�
   never raise — a broken cache degrades to a dim placeholder, never a broken
   statusline.
 
-**Cost:** orientation calls run on your Pro/Max subscription via the CLI —
-no API key. Each is a single sub-cent Haiku call, at most one per 6 turns
-per session, with a failure backoff that caps a persistently broken CLI at
-~6 retries/hour. If a compute fails, the last good orientation is kept and
-honestly ages ("scored 3h ago") rather than being papered over.
+**Cost:** orientation calls run on your Pro/Max subscription via the CLI — no
+API key, no per-call bill. Each compute is a single Haiku 4.5 call, but it
+carries Claude Code's full system context (~29K tokens, mostly prompt-cached)
+along with the short prompt — so it costs roughly **1–3¢** of subscription
+usage per compute (dropping toward sub-cent only when computes land back-to-back
+inside the prompt-cache window; measured ~2¢, 2026-06-10). The Stop hook
+recomputes at most once every 6 turns; peeking a session whose turns have
+advanced can trigger one extra refresh. A failure backoff caps a persistently
+broken CLI at ~6 retries/hour, and if a compute fails the last good orientation
+is kept and honestly ages ("scored 3h ago") rather than being papered over.
 
 ## Development
 
