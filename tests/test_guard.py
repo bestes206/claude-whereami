@@ -98,6 +98,20 @@ def test_compute_entry_tolerates_missing_marker(tmp_path, monkeypatch):
     drift._compute_entry("s1", str(tmp_path / "empty.jsonl"))  # no raise
 
 
+def test_future_dated_failure_ts_is_inert(tmp_path, monkeypatch):
+    # A backwards clock step (or TZ-mangled hand edit) leaves last_failure_ts
+    # in the future; without a lower clamp the negative age is < FAILURE_BACKOFF
+    # forever-until-then, suppressing every spawn. Mirror peek_active's clamp.
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    record = []
+    cache.save_cache("s1", {"ts": "2026-06-09T10:00:00-07:00",
+                            "last_failure_ts": "2026-06-09T11:00:00-07:00"})
+    before_fail = cache.ts_to_epoch("2026-06-09T10:30:00-07:00")
+    assert drift.maybe_spawn_compute("s1", "/t", now=before_fail,
+                                     spawner=_spawned(record)) is True
+    assert len(record) == 1
+
+
 def test_failure_backoff_blocks_then_allows(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     record = []

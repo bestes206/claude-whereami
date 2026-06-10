@@ -123,7 +123,9 @@ def in_failure_backoff(data: Dict, now: float) -> bool:
     ts = cache.ts_to_epoch(data.get("ts"))
     if ts is not None and ts >= fail:
         return False
-    return (now - fail) < FAILURE_BACKOFF
+    # Lower clamp as in peek_active: a future-dated timestamp (clock step,
+    # mangled hand edit) must be inert, not a spawn freeze until it passes.
+    return 0 <= (now - fail) < FAILURE_BACKOFF
 
 
 def _acquire_marker(marker, now: float) -> bool:
