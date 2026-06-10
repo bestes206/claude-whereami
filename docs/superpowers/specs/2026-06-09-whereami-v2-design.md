@@ -280,7 +280,10 @@ Guard = marker file `<sanitized-sid>.computing` in the cache dir (same
   numbers are listed as tunable.
 - **TTL-bounded residual:** if the spawned child dies before entering
   `compute()` (interpreter/import failure), no unlink path runs and the
-  marker leaks until reclaimed at TTL. Accepted.
+  marker leaks until reclaimed at TTL. Accepted. Same class: a child
+  suspended past `MARKER_TTL` (machine sleep, SIGSTOP) can resume and
+  `finally`-unlink a reclaimed-and-recreated marker, permitting one
+  transient double-spawn — bounded, self-healing, accepted.
 
 **Failure backoff (both paths):** when `last_failure_ts` is newer than `ts`
 *and* younger than `FAILURE_BACKOFF (600s)`, skip the spawn. Without this, a
