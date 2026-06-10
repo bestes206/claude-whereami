@@ -85,13 +85,21 @@ def _collapse(text: str) -> str:
     return " ".join(text.split())
 
 
+def _clean(value) -> str:
+    """Trust nothing in the cache: model-authored or hand-edited fields must
+    be strings, newline-free (ANSI resets are per-line), and non-blank — a
+    malformed minor field degrades alone, never the whole panel."""
+    if not isinstance(value, str):
+        return ""
+    return _collapse(value)
+
+
 def gist_segment(cached: dict) -> str:
     """The gist in colored words — a written message, not a colored glyph.
     Missing score OR gist (brand-new session, v1 cache) → dim placeholder."""
     score = cached.get("score")
-    gist = cached.get("gist")
-    if not isinstance(score, (int, float)) or not math.isfinite(score) \
-            or not isinstance(gist, str) or not gist:
+    gist = _clean(cached.get("gist"))
+    if not isinstance(score, (int, float)) or not math.isfinite(score) or not gist:
         return _DIM + "…" + _RESET
     return _color_for(int(score)) + gist + _RESET
 
@@ -203,12 +211,15 @@ def wrap_message(text: str, width: int) -> List[str]:
 
 
 def open_loop_line(cached: dict, turns: int) -> Optional[str]:
-    loop = cached.get("open_loop")
+    loop = _clean(cached.get("open_loop"))
     if not loop:
         return None   # nothing awaited → no line, never a fabricated ask
+    talc = cached.get("turns_at_last_compute")
+    if not isinstance(talc, int) or isinstance(talc, bool):
+        talc = 0
     # Any turns since the score → presumptively already answered → dim
     # ("probably answered / refreshing").
-    stale = turns > cached.get("turns_at_last_compute", 0)
+    stale = turns > talc
     text = "⊙ your turn: " + loop
     return _DIM + text + _RESET if stale else text
 
@@ -216,13 +227,12 @@ def open_loop_line(cached: dict, turns: int) -> Optional[str]:
 def render_peek(data: dict, cached: dict, last: Optional[str],
                 turns: int, now: float) -> str:
     score = cached.get("score")
-    gist = cached.get("gist")
-    scored = (isinstance(score, (int, float)) and math.isfinite(score)
-              and isinstance(gist, str) and bool(gist))
+    gist = _clean(cached.get("gist"))
+    scored = isinstance(score, (int, float)) and math.isfinite(score) and bool(gist)
     if scored:
         head = _color_for(int(score)) + "drift {} · {}".format(int(score), gist) + _RESET
-        goal = cached.get("goal") or truncate(
-            _collapse(cached.get("opening_goal") or ""), GOAL_PAREN_LIMIT)
+        goal = truncate(_clean(cached.get("goal")) or _clean(cached.get("opening_goal")),
+                        GOAL_PAREN_LIMIT)
         if goal:
             head += "  " + _DIM + "(goal: {})".format(goal) + _RESET
     else:

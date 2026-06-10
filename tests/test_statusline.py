@@ -303,3 +303,58 @@ def test_peek_goal_falls_back_to_opening_goal_head(tmp_path, monkeypatch):
                             "opening_goal": "g" * 80, "ts": _iso(now - 60)})
     out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
     assert "(goal: " + "g" * 39 + "…)" in out
+
+
+def test_peek_malformed_minor_fields_degrade_alone(tmp_path, monkeypatch):
+    # A bad minor field must not blank a panel that has a good score+gist.
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 20, "gist": "parser work",
+                            "open_loop": ["not", "a", "string"],
+                            "turns_at_last_compute": "nine",
+                            "opening_goal": 12345,
+                            "ts": _iso(now - 60)})
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    lines = out.split("\n")
+    assert "parser work" in lines[0]      # good fields survive
+    assert "⊙" not in out                 # bad open_loop omitted, not rendered/crashed
+    assert "(goal:" not in out            # non-str opening_goal → parenthetical omitted
+
+
+def test_model_authored_newlines_are_collapsed(tmp_path, monkeypatch):
+    # Newlines in gist/goal/open_loop must not add panel rows or orphan the
+    # per-line ANSI reset (color bleed).
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 20, "gist": "parser\nwork",
+                            "open_loop": "pick\na name",
+                            "goal": "goal\nline", "ts": _iso(now - 60),
+                            "turns_at_last_compute": 0})
+    cache.save_turns("s1", 0)
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    for line in out.split("\n"):
+        assert "\r" not in line
+        # Each line that has any ANSI escape must have an even count
+        # (every open has a paired close on the same line).
+        # A line with DIM+text+RESET has exactly 2 escapes → even.
+        # Color bleed (open without reset) → odd.
+        if "\033[" in line:
+            assert line.count("\033[") % 2 == 0, \
+                "ANSI bleed detected on line: {!r}".format(line)
+    assert "parser work" in out.split("\n")[0]   # collapsed, single row
+    assert "⊙ your turn: pick a name" in out
+    assert "(goal: goal line)" in out
+    # normal mode too: gist_segment is the always-on path
+    assert statusline.gist_segment({"score": 5, "gist": "a\nb"}) == GREEN + "a b" + RESET
+
+
+def test_peek_cached_goal_truncated(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 10, "gist": "parser work",
+                            "goal": "G" * 80, "ts": _iso(now - 60)})
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    assert "(goal: " + "G" * 39 + "…)" in out
