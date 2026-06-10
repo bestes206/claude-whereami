@@ -116,8 +116,9 @@ def run_hook() -> None:
     if not session_id or not transcript_path:
         sys.exit(0)
     turns = cache.increment_turns(session_id)
-    if hook_due(cache.load_cache(session_id), turns):
-        maybe_spawn_compute(session_id, transcript_path)
+    data = cache.load_cache(session_id)
+    if hook_due(data, turns):
+        maybe_spawn_compute(session_id, transcript_path, data=data)
     sweep_stale_files()
     sys.exit(0)
 
@@ -178,11 +179,16 @@ def _acquire_marker(marker, now: float) -> bool:
 
 def maybe_spawn_compute(session_id: str, transcript_path: str,
                         now: Optional[float] = None,
-                        spawner: Optional[Callable[[str, str], None]] = None) -> bool:
+                        spawner: Optional[Callable[[str, str], None]] = None,
+                        data: Optional[Dict] = None) -> bool:
     """The ONLY path that spawns a compute — used by the Stop hook and the
-    renderer. Marker file = in-flight guard. Returns True iff spawned."""
+    renderer. Marker file = in-flight guard. Returns True iff spawned.
+    `data` is the caller's already-loaded cache dict: the snapshot that
+    decided "due" also decides the backoff, with no re-read between."""
     now = time.time() if now is None else now
-    if in_failure_backoff(cache.load_cache(session_id), now):
+    if data is None:
+        data = cache.load_cache(session_id)
+    if in_failure_backoff(data, now):
         return False
     cache.CACHE_DIR.mkdir(parents=True, exist_ok=True)
     marker = cache.marker_path(session_id)

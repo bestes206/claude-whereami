@@ -280,7 +280,7 @@ def _maybe_recompute(session_id: str, transcript_path: str,
     try:
         from . import drift   # lazy: keep normal-mode startup fast
         if drift.peek_due(cached, turns):
-            drift.maybe_spawn_compute(session_id, transcript_path)
+            drift.maybe_spawn_compute(session_id, transcript_path, data=cached)
     except BaseException:
         pass
 

@@ -98,6 +98,23 @@ def test_compute_entry_tolerates_missing_marker(tmp_path, monkeypatch):
     drift._compute_entry("s1", str(tmp_path / "empty.jsonl"))  # no raise
 
 
+def test_maybe_spawn_uses_preloaded_cache_snapshot(tmp_path, monkeypatch):
+    # Both callers load the cache for their due check microseconds earlier;
+    # the same snapshot must drive the backoff decision (one read per
+    # invocation, no re-read between due-check and backoff).
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    record = []
+    snapshot = {"ts": "2026-06-09T10:00:00-07:00",
+                "last_failure_ts": "2026-06-09T11:00:00-07:00"}
+    fail_epoch = cache.ts_to_epoch("2026-06-09T11:00:00-07:00")
+    inside = fail_epoch + drift.FAILURE_BACKOFF - 1
+    # Disk has no failure recorded; the passed snapshot does — and wins.
+    assert drift.maybe_spawn_compute("s1", "/t", now=inside,
+                                     spawner=_spawned(record),
+                                     data=snapshot) is False
+    assert record == []
+
+
 def test_future_dated_failure_ts_is_inert(tmp_path, monkeypatch):
     # A backwards clock step (or TZ-mangled hand edit) leaves last_failure_ts
     # in the future; without a lower clamp the negative age is < FAILURE_BACKOFF

@@ -431,7 +431,7 @@ def test_peek_cached_goal_truncated(tmp_path, monkeypatch):
 def _patch_spawn(monkeypatch, calls):
     from whereami import drift
     monkeypatch.setattr(drift, "maybe_spawn_compute",
-                        lambda sid, path, now=None, spawner=None: calls.append(sid))
+                        lambda sid, path, **kwargs: calls.append(sid))
 
 
 def test_peek_triggers_recompute_when_turns_advanced(tmp_path, monkeypatch):
