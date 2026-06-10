@@ -163,7 +163,7 @@ papered over.
 git clone https://github.com/bestes206/claude-whereami
 cd claude-whereami
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q   # 117 tests, all offline
+.venv/bin/pytest -q   # full suite, all offline
 ```
 
 The editable install gives you `whereami-statusline`, `whereami-hook`, and
