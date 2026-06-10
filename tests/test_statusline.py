@@ -59,7 +59,7 @@ def test_render_includes_context_pct(tmp_path, monkeypatch):
         "session_id": "s1", "transcript_path": str(tmp_path / "none.jsonl"),
         "context_window": {"used_percentage": 42},
     })
-    assert "42%" in line
+    assert "⊠ 42%" in line
 
 
 def test_render_omits_cost_by_default(tmp_path, monkeypatch):
