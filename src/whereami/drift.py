@@ -89,6 +89,15 @@ def hook_due(data: Dict, turns: int) -> bool:
     return delta >= THROTTLE_TURNS or delta < 0
 
 
+def peek_due(data: Dict, turns: int) -> bool:
+    """The renderer's recompute trigger — kept beside hook_due so the two
+    cadence policies (peek: any new turn; hook: THROTTLE_TURNS) and their
+    shared arm ordering are tuned in one module."""
+    if not data.get("gist"):
+        return True
+    return turns != cache.turns_at_last_compute(data)
+
+
 def run_hook() -> None:
     try:
         payload = json.load(sys.stdin)

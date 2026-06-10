@@ -267,10 +267,8 @@ def _maybe_recompute(session_id: str, transcript_path: str,
     """The renderer's only write path (via the shared spawn guard). Entirely
     exception-swallowed: rendering must never break."""
     try:
-        # Gist arm first, as in drift.hook_due; != catches a reset .turns
-        # file behind the cache, as hook_due's negative-delta arm does.
-        if not cached.get("gist") or turns != cache.turns_at_last_compute(cached):
-            from . import drift   # lazy: keep normal-mode startup fast
+        from . import drift   # lazy: keep normal-mode startup fast
+        if drift.peek_due(cached, turns):
             drift.maybe_spawn_compute(session_id, transcript_path)
     except BaseException:
         pass
