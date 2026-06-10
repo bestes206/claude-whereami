@@ -87,6 +87,17 @@ def test_paths_share_sanitization(tmp_path, monkeypatch):
     assert cache.peek_path().name == "peek"
 
 
+def test_turns_at_last_compute_tolerates_garbage():
+    # The .json file is hand-editable: a corrupt counter must read as 0,
+    # never raise out of the hook or renderer.
+    assert cache.turns_at_last_compute({}) == 0
+    assert cache.turns_at_last_compute({"turns_at_last_compute": 7}) == 7
+    assert cache.turns_at_last_compute({"turns_at_last_compute": "nine"}) == 0
+    assert cache.turns_at_last_compute({"turns_at_last_compute": True}) == 0
+    assert cache.turns_at_last_compute({"turns_at_last_compute": 7.5}) == 0
+    assert cache.turns_at_last_compute({"turns_at_last_compute": None}) == 0
+
+
 def test_ts_to_epoch():
     assert cache.ts_to_epoch(None) is None
     assert cache.ts_to_epoch("") is None

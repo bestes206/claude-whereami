@@ -38,6 +38,15 @@ def ts_to_epoch(value) -> Optional[float]:
         return None
 
 
+def turns_at_last_compute(data: Dict) -> int:
+    """The cache's turns_at_last_compute as an int; the file is hand-editable,
+    so a missing/garbage/bool counter reads as 0 — degrade, never raise."""
+    value = data.get("turns_at_last_compute")
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return 0
+
+
 def _atomic_write(target: Path, text: str) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     # Unique temp file per writer: concurrent Stop hooks / a detached compute

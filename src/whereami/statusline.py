@@ -223,12 +223,9 @@ def open_loop_line(cached: dict, turns: int) -> Optional[str]:
     loop = _clean(cached.get("open_loop"))
     if not loop:
         return None   # nothing awaited → no line, never a fabricated ask
-    talc = cached.get("turns_at_last_compute")
-    if not isinstance(talc, int) or isinstance(talc, bool):
-        talc = 0
     # Any turns since the score → presumptively already answered → dim
     # ("probably answered / refreshing").
-    stale = turns > talc
+    stale = turns > cache.turns_at_last_compute(cached)
     text = "⊙ your turn: " + loop
     return _DIM + text + _RESET if stale else text
 
@@ -266,10 +263,8 @@ def _maybe_recompute(session_id: str, transcript_path: str,
     """The renderer's only write path (via the shared spawn guard). Entirely
     exception-swallowed: rendering must never break."""
     try:
-        # Gist arm first, as in drift.hook_due: a corrupt turns_at_last_compute
-        # TypeErrors in the comparison (swallowed below) and must not suppress
-        # the gist-arm recovery.
-        if not cached.get("gist") or turns > cached.get("turns_at_last_compute", 0):
+        # Gist arm first, as in drift.hook_due.
+        if not cached.get("gist") or turns > cache.turns_at_last_compute(cached):
             from . import drift   # lazy: keep normal-mode startup fast
             drift.maybe_spawn_compute(session_id, transcript_path)
     except BaseException:

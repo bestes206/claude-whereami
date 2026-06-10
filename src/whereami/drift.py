@@ -80,7 +80,7 @@ def hook_due(data: Dict, turns: int) -> bool:
         return True
     if not data.get("gist"):
         return True   # v1→v2 transition self-heal (turn-delta may be negative)
-    return turns - data.get("turns_at_last_compute", 0) >= THROTTLE_TURNS
+    return turns - cache.turns_at_last_compute(data) >= THROTTLE_TURNS
 
 
 def run_hook() -> None:

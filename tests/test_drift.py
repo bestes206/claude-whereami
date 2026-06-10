@@ -251,6 +251,15 @@ def test_hook_spawns_when_no_cache(tmp_path, monkeypatch):
     assert len(spawned) == 1   # no ts → due immediately
 
 
+def test_hook_due_tolerates_corrupt_talc():
+    # Spec-sanctioned hand-edits can corrupt turns_at_last_compute; the Stop
+    # hook must degrade (counter reads as 0), not crash every turn.
+    data = {"ts": "2026-06-09T10:00:00-07:00", "gist": "parser work",
+            "turns_at_last_compute": "nine"}
+    assert drift.hook_due(data, 7) is True
+    assert drift.hook_due(data, 3) is False  # still throttles from 0
+
+
 def test_hook_due_via_gist_arm_on_v1_cache(tmp_path, monkeypatch):
     # Resumed v1 session: ts present, gist absent, turn-delta hugely negative.
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
