@@ -224,7 +224,7 @@ def compute(session_id: str, transcript_path: str,
     cache.save_cache(session_id, data)
 
 
-def hook_due(data: Dict, turns: int) -> bool:
+def hook_due(data: Dict, turns: int, idle_returned: bool = False) -> bool:
     if not data.get("ts"):
         return True
     if not data.get("gist"):
@@ -232,7 +232,9 @@ def hook_due(data: Dict, turns: int) -> bool:
     delta = turns - cache.turns_at_last_compute(data)
     # Negative delta = a reset/lost .turns file behind a surviving cache:
     # inconsistent state is due, not "fresh for the next 45 turns".
-    return delta >= THROTTLE_TURNS or delta < 0
+    # idle_returned = the user came back after >= WHEREAMI_IDLE_MIN away: refresh
+    # the gist on return, additive to the periodic cadence.
+    return delta >= THROTTLE_TURNS or delta < 0 or idle_returned
 
 
 def peek_due(data: Dict, turns: int) -> bool:
@@ -273,7 +275,8 @@ def run_hook() -> None:
         sys.exit(0)
     turns = cache.increment_turns(session_id)
     data = cache.load_cache(session_id)
-    if hook_due(data, turns):
+    idle_returned = returned_from_idle(transcript_path, IDLE_THRESHOLD)
+    if hook_due(data, turns, idle_returned):
         maybe_spawn_compute(session_id, transcript_path, data=data)
     sweep_stale_files()
     sys.exit(0)

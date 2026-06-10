@@ -690,6 +690,42 @@ def test_read_idle_threshold_default_and_overrides(monkeypatch):
     assert drift._read_idle_threshold() == 600
 
 
+def test_hook_due_idle_returned_forces_due():
+    data = {"ts": "2026-06-09T10:00:00-07:00", "gist": "parser work",
+            "turns_at_last_compute": 5}
+    assert drift.hook_due(data, 6) is False                       # delta 1 < 6
+    assert drift.hook_due(data, 6, idle_returned=True) is True    # idle forces due
+
+
+def test_hook_due_default_idle_param_keeps_existing_behavior():
+    data = {"ts": "x", "gist": "g", "turns_at_last_compute": 5}
+    assert drift.hook_due(data, 6) is False   # 3-arg call still valid (no churn)
+
+
+def test_hook_spawns_on_idle_return_below_throttle(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    p = _idle_transcript(tmp_path, gap_seconds=20 * 60)   # > default 10 min
+    cache.save_turns("s1", 5)
+    cache.save_cache("s1", {"ts": "2026-06-09T10:00:00-07:00", "gist": "g",
+                            "turns_at_last_compute": 5})
+    spawned = []
+    payload = {"session_id": "s1", "transcript_path": str(p)}
+    _run_hook_with(monkeypatch, payload, spawned)   # turns 5→6, cadence not due
+    assert len(spawned) == 1   # spawned via the idle-return arm
+
+
+def test_hook_no_idle_spawn_when_gap_small(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    p = _idle_transcript(tmp_path, gap_seconds=60)
+    cache.save_turns("s1", 5)
+    cache.save_cache("s1", {"ts": "2026-06-09T10:00:00-07:00", "gist": "g",
+                            "turns_at_last_compute": 5})
+    spawned = []
+    payload = {"session_id": "s1", "transcript_path": str(p)}
+    _run_hook_with(monkeypatch, payload, spawned)
+    assert spawned == []   # small gap + cadence not due → no spawn
+
+
 def test_persistent_parse_failure_suppresses_hook_spawns(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     p = _transcript(tmp_path)
