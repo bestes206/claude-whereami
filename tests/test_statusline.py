@@ -129,3 +129,177 @@ def test_main_never_breaks_on_hostile_payload(monkeypatch, capsys):
         monkeypatch.setattr(_sys, "stdin", io.StringIO(payload))
         statusline.main()   # must not raise
         assert capsys.readouterr().out.endswith("\n")
+
+
+import os
+from datetime import datetime
+
+
+def _iso(epoch):
+    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+
+
+def _touch_peek(tmp_path, mtime):
+    p = tmp_path / "peek"
+    p.touch()
+    os.utime(str(p), (mtime, mtime))
+    return p
+
+
+def test_peek_active_window_and_expiry(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    assert statusline.peek_active(1000.0) is False   # no peek file
+    _touch_peek(tmp_path, 1000.0)
+    assert statusline.peek_active(1000.0 + statusline.PEEK_SECONDS - 1) is True
+    assert statusline.peek_active(1000.0 + statusline.PEEK_SECONDS) is False
+
+
+def test_peek_future_mtime_is_inert(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    _touch_peek(tmp_path, 2000.0)   # clock stepped: mtime in the future
+    assert statusline.peek_active(1000.0) is False
+
+
+def test_peek_repress_extends_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    _touch_peek(tmp_path, 1000.0)
+    expired = 1000.0 + statusline.PEEK_SECONDS + 5
+    assert statusline.peek_active(expired) is False
+    _touch_peek(tmp_path, expired)   # re-press refreshes the mtime
+    assert statusline.peek_active(expired + 1) is True
+
+
+def test_fmt_ago():
+    assert statusline.fmt_ago(45) == "45s"
+    assert statusline.fmt_ago(240) == "4m"
+    assert statusline.fmt_ago(7200) == "2h"
+    assert statusline.fmt_ago(3 * 86_400) == "3d"
+    assert statusline.fmt_ago(-5) == "0s"
+
+
+def test_peek_staleness_strings():
+    now = 100_000.0
+    assert statusline.staleness_segment({"ts": _iso(now - 240)}, now) == "scored 4m ago"
+    assert statusline.staleness_segment({"ts": _iso(now - 3 * 86_400)}, now) == "scored 3d ago"
+    assert statusline.staleness_segment({}, now) == "no score yet"
+
+
+def test_peek_failure_segment_only_when_failure_newer_than_ts():
+    now = 100_000.0
+    cached = {"ts": _iso(now - 600), "last_failure_ts": _iso(now - 120)}
+    assert statusline.failure_segment(cached, now) == "last compute failed 2m ago"
+    cached = {"ts": _iso(now - 60), "last_failure_ts": _iso(now - 120)}
+    assert statusline.failure_segment(cached, now) is None
+    assert statusline.failure_segment({}, now) is None
+
+
+def test_split_hint_both_arms():
+    assert statusline.split_hint({"score": 86}, None) is True   # score alone
+    assert statusline.split_hint({"score": 70}, 71) is True     # score + context
+    assert statusline.split_hint({"score": 70}, 60) is False
+    assert statusline.split_hint({"score": 50}, 90) is False
+    assert statusline.split_hint({}, 90) is False
+
+
+def test_peek_full_panel_golden(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setenv("COLUMNS", "100")
+    now = 10_000.0
+    _touch_peek(tmp_path, now - 1)
+    cache.save_cache("s1", {"score": 58, "gist": "CI retry backoff logic",
+                            "open_loop": "choose a backoff strategy",
+                            "goal": "in-session reorientation tool",
+                            "ts": _iso(now - 240), "turns_at_last_compute": 12})
+    cache.save_turns("s1", 12)   # no turns since the score → ⊙ bright
+    p = tmp_path / "t.jsonl"
+    p.write_text(json.dumps({"type": "user", "message": {
+        "role": "user", "content": "ok now make the retry logic exponential"}}) + "\n")
+    out = statusline.render({
+        "session_id": "s1", "transcript_path": str(p),
+        "cost": {"total_duration_ms": 2_520_000},
+        "context_window": {"used_percentage": 63},
+    }, now=now)
+    lines = out.split("\n")
+    assert lines[0] == (AMBER + "drift 58 · CI retry backoff logic" + RESET
+                        + "  " + DIM + "(goal: in-session reorientation tool)" + RESET)
+    assert lines[1] == "❯ ok now make the retry logic exponential"
+    assert lines[2] == "⊙ your turn: choose a backoff strategy"
+    assert lines[3] == "⏱ 42m · ⊠ 63% · scored 4m ago"
+
+
+def test_peek_open_loop_dim_when_stale_omitted_when_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 10, "gist": "parser work",
+                            "open_loop": "pick a name", "ts": _iso(now - 60),
+                            "turns_at_last_compute": 6})
+    cache.save_turns("s1", 8)   # turns have passed → presumptively answered → dim
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    assert DIM + "⊙ your turn: pick a name" + RESET in out
+    data = cache.load_cache("s1")
+    data["open_loop"] = ""
+    cache.save_cache("s1", data)
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    assert "⊙" not in out   # empty open loop → line omitted, never fabricated
+
+
+def test_split_hint_rendered_in_peek_tail(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 90, "gist": "totally different work",
+                            "ts": _iso(now - 60), "turns_at_last_compute": 0})
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    assert out.split("\n")[-1].endswith("· split?")
+
+
+def test_peek_message_wraps_to_four_lines_with_ellipsis(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setenv("COLUMNS", "100")
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    p = tmp_path / "t.jsonl"
+    p.write_text(json.dumps({"type": "user", "message": {
+        "role": "user", "content": "word " * 200}}) + "\n")   # ~1000 chars
+    out = statusline.render({"session_id": "s1", "transcript_path": str(p)}, now=now)
+    msg_lines = [l for l in out.split("\n") if l.startswith("❯") or l.startswith("  ")]
+    assert len(msg_lines) == 4
+    assert msg_lines[-1].endswith("…")
+    assert all(len(l) <= 100 for l in msg_lines)
+
+
+def test_peek_no_cache_degraded_panel(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    p = tmp_path / "t.jsonl"
+    p.write_text(json.dumps({"type": "user", "message": {
+        "role": "user", "content": "first ask"}}) + "\n")
+    out = statusline.render({"session_id": "s1", "transcript_path": str(p),
+                             "context_window": {"used_percentage": 5}}, now=now)
+    lines = out.split("\n")
+    assert lines[0] == DIM + "…" + RESET   # no "drift —", no empty goal parenthetical
+    assert lines[1] == "❯ first ask"
+    assert "⊙" not in out
+    assert lines[-1] == "⊠ 5% · no score yet"
+
+
+def test_peek_v1_cache_renders_placeholder(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 42, "label": "v1 label", "ts": _iso(now - 60),
+                            "turns_seen": 9, "turns_at_last_compute": 9})
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    assert out.split("\n")[0] == DIM + "…" + RESET
+
+
+def test_peek_goal_falls_back_to_opening_goal_head(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 10, "gist": "parser work",
+                            "opening_goal": "g" * 80, "ts": _iso(now - 60)})
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    assert "(goal: " + "g" * 39 + "…)" in out
