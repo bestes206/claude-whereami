@@ -2,30 +2,18 @@
 import json
 import os
 import sys
-from typing import Optional
+from typing import List, Optional
 
 from . import cache, transcript
 
 
-# ANSI-colored text-width dot (U+25CF). Carries the coherence signal by color
-# rather than an emoji, so it stays the same size/weight as the rest of the line.
 _RESET = "\033[0m"
 _GREEN = "\033[32m"
 _AMBER = "\033[33m"
 _RED = "\033[31m"
 _DIM = "\033[90m"  # bright-black / grey: no data yet
 
-
-def light(score: Optional[int]) -> str:
-    if score is None:
-        color = _DIM
-    elif score <= 33:
-        color = _GREEN
-    elif score <= 66:
-        color = _AMBER
-    else:
-        color = _RED
-    return color + "●" + _RESET
+LINE2_LIMIT = 150  # line-2 head-keep ceiling (constant by design: editable install)
 
 
 def truncate(text: str, limit: int) -> str:
@@ -72,33 +60,58 @@ def context_pct(data: dict) -> Optional[int]:
     return None
 
 
-def render(data: dict) -> str:
-    session_id = data.get("session_id", "")
-    transcript_path = data.get("transcript_path", "")
-    cached = cache.load_cache(session_id)
+def _color_for(score: int) -> str:
+    if score <= 33:
+        return _GREEN
+    if score <= 66:
+        return _AMBER
+    return _RED
 
-    segs = [light(cached.get("score"))]
 
-    last = transcript.last_human_text(transcript_path) if transcript_path else None
-    if last:
-        segs.append('"{}"'.format(truncate(last.replace("\n", " "), 60)))
+def _collapse(text: str) -> str:
+    return " ".join(text.split())
 
+
+def gist_segment(cached: dict) -> str:
+    """The gist in colored words — a written message, not a colored glyph.
+    Missing score OR gist (brand-new session, v1 cache) → dim placeholder."""
+    score = cached.get("score")
+    gist = cached.get("gist")
+    if not isinstance(score, (int, float)) or not isinstance(gist, str) or not gist:
+        return _DIM + "…" + _RESET
+    return _color_for(int(score)) + gist + _RESET
+
+
+def _gauges(data: dict) -> List[str]:
+    segs = []
     cost = data.get("cost") or {}
     dur = cost.get("total_duration_ms")
     if dur:
         segs.append("⏱ " + fmt_duration(dur))
-
     pct = context_pct(data)
     if pct is not None:
         # ⊠ (squared-times) glyph reads as context-window fill; mono, line-weight
         segs.append("⊠ {}%".format(pct))
-
     if os.environ.get("WHEREAMI_SHOW_COST"):
         usd = cost.get("total_cost_usd")
         if usd:
             segs.append("\U0001f4b2{:.2f}".format(usd))
+    return segs
 
-    return " · ".join(segs)
+
+def render_normal(data: dict, cached: dict, last: Optional[str]) -> str:
+    lines = [" · ".join([gist_segment(cached)] + _gauges(data))]
+    if last:
+        lines.append("❯ " + truncate(_collapse(last), LINE2_LIMIT))
+    return "\n".join(lines)
+
+
+def render(data: dict) -> str:
+    session_id = data.get("session_id", "")
+    transcript_path = data.get("transcript_path", "")
+    cached = cache.load_cache(session_id)
+    last = transcript.last_human_text(transcript_path) if transcript_path else None
+    return render_normal(data, cached, last)
 
 
 def main() -> None:

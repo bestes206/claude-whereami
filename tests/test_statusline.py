@@ -1,13 +1,9 @@
 # tests/test_statusline.py
-from whereami import statusline, cache
+import json
 
+from whereami import cache, statusline
 
-def test_light_buckets():
-    # color carried by ANSI escape; glyph is a text-width dot, not an emoji
-    assert statusline.light(None) == "\033[90m●\033[0m"   # dim grey: no data
-    assert statusline.light(10) == "\033[32m●\033[0m"     # green
-    assert statusline.light(50) == "\033[33m●\033[0m"     # amber
-    assert statusline.light(90) == "\033[31m●\033[0m"     # red
+GREEN, AMBER, RED, DIM, RESET = "\033[32m", "\033[33m", "\033[31m", "\033[90m", "\033[0m"
 
 
 def test_fmt_duration():
@@ -19,23 +15,6 @@ def test_fmt_duration():
 def test_truncate():
     assert statusline.truncate("short", 60) == "short"
     assert statusline.truncate("x" * 80, 60) == "x" * 59 + "…"
-
-
-def test_render_includes_light_and_last_said(tmp_path, monkeypatch):
-    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
-    cache.save_cache("s1", {"score": 80})
-    p = tmp_path / "t.jsonl"
-    import json
-    p.write_text(json.dumps(
-        {"type": "user", "message": {"role": "user", "content": "what did I ask"}}) + "\n")
-    line = statusline.render({
-        "session_id": "s1",
-        "transcript_path": str(p),
-        "cost": {"total_duration_ms": 125_000, "total_cost_usd": 0.0},
-    })
-    assert "\033[31m●\033[0m" in line    # red light from score 80
-    assert "what did I ask" in line
-    assert "2m" in line
 
 
 def test_context_pct_from_payload():
@@ -80,3 +59,56 @@ def test_render_shows_cost_when_enabled(tmp_path, monkeypatch):
         "cost": {"total_cost_usd": 1.23},
     })
     assert "1.23" in line
+
+
+def test_gist_segment_colors_words_by_score():
+    assert statusline.gist_segment({"score": 10, "gist": "parser retry logic"}) == \
+        GREEN + "parser retry logic" + RESET
+    assert statusline.gist_segment({"score": 50, "gist": "parser retry logic"}) == \
+        AMBER + "parser retry logic" + RESET
+    assert statusline.gist_segment({"score": 90, "gist": "parser retry logic"}) == \
+        RED + "parser retry logic" + RESET
+
+
+def test_gist_segment_placeholder_when_missing_score_or_gist():
+    assert statusline.gist_segment({}) == DIM + "…" + RESET
+    # v1 cache: score present, gist absent → placeholder, never an empty colored void
+    assert statusline.gist_segment({"score": 42, "label": "v1 label"}) == DIM + "…" + RESET
+    assert statusline.gist_segment({"gist": "no score"}) == DIM + "…" + RESET
+
+
+def test_render_normal_two_lines(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    cache.save_cache("s1", {"score": 80, "gist": "CI retry backoff logic"})
+    p = tmp_path / "t.jsonl"
+    p.write_text(json.dumps(
+        {"type": "user", "message": {"role": "user",
+                                     "content": "make it\nexponential"}}) + "\n")
+    out = statusline.render({
+        "session_id": "s1", "transcript_path": str(p),
+        "cost": {"total_duration_ms": 125_000},
+        "context_window": {"used_percentage": 63},
+    })
+    lines = out.split("\n")
+    assert len(lines) == 2
+    assert RED + "CI retry backoff logic" + RESET in lines[0]
+    assert "⏱ 2m" in lines[0] and "⊠ 63%" in lines[0]
+    assert lines[1] == "❯ make it exponential"   # newlines collapsed, head kept
+
+
+def test_render_normal_line2_truncates_at_150(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    p = tmp_path / "t.jsonl"
+    p.write_text(json.dumps(
+        {"type": "user", "message": {"role": "user", "content": "x" * 200}}) + "\n")
+    out = statusline.render({"session_id": "s1", "transcript_path": str(p)})
+    line2 = out.split("\n")[1]
+    assert line2 == "❯ " + "x" * 149 + "…"
+
+
+def test_render_degrades_to_one_line_without_message(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    out = statusline.render({"session_id": "s1",
+                             "transcript_path": str(tmp_path / "none.jsonl")})
+    assert "\n" not in out
+    assert DIM + "…" + RESET in out
