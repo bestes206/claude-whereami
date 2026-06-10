@@ -265,6 +265,19 @@ def test_split_hint_rendered_in_peek_tail(tmp_path, monkeypatch):
     assert out.split("\n")[-1].endswith("· split?")
 
 
+def test_no_split_hint_on_unscored_panel(tmp_path, monkeypatch):
+    # A v1 cache (score, no gist) renders the dim not-yet-scored placeholder;
+    # the same frame must not also recommend a split from that unusable score.
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 90, "label": "v1", "ts": _iso(now - 60)})
+    out = statusline.render({"session_id": "s1", "transcript_path": "",
+                             "context_window": {"used_percentage": 90}}, now=now)
+    assert out.split("\n")[0] == DIM + "…" + RESET
+    assert "split?" not in out
+
+
 def test_peek_message_wraps_to_four_lines_with_ellipsis(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     monkeypatch.setenv("COLUMNS", "100")

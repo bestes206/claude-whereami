@@ -234,7 +234,8 @@ def render_peek(data: dict, cached: dict, last: Optional[str],
                 turns: int, now: float) -> str:
     score = _score_value(cached)
     gist = _clean(cached.get("gist"))
-    if score is not None and gist:
+    scored = score is not None and bool(gist)
+    if scored:
         head = _color_for(score) + "drift {} · {}".format(score, gist) + _RESET
         goal = truncate(_clean(cached.get("goal")) or _clean(cached.get("opening_goal")),
                         GOAL_PAREN_LIMIT)
@@ -252,7 +253,9 @@ def render_peek(data: dict, cached: dict, last: Optional[str],
     failure = failure_segment(cached, now)
     if failure:
         tail.append(failure)
-    if split_hint(cached, context_pct(data)):
+    # Only a panel that shows the score may act on it: a not-yet-scored
+    # placeholder must not recommend a split from the same unusable score.
+    if scored and split_hint(cached, context_pct(data)):
         tail.append("split?")
     lines.append(" · ".join(tail))
     return "\n".join(lines)
