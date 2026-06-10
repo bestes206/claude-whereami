@@ -88,6 +88,8 @@ def run_hook() -> None:
         payload = json.load(sys.stdin)
     except ValueError:
         sys.exit(0)
+    if not isinstance(payload, dict):
+        sys.exit(0)   # null/list/str are valid JSON; degrade like bad JSON
     session_id = payload.get("session_id")
     transcript_path = payload.get("transcript_path")
     if not session_id or not transcript_path:

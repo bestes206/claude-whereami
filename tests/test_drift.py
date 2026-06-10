@@ -251,6 +251,19 @@ def test_hook_spawns_when_no_cache(tmp_path, monkeypatch):
     assert len(spawned) == 1   # no ts → due immediately
 
 
+def test_hook_exits_cleanly_on_non_object_payload(tmp_path, monkeypatch):
+    # `null`/lists are valid JSON, so the ValueError guard doesn't fire;
+    # the hook must exit 0 silently, as statusline.main survives the same.
+    import pytest
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    for payload in ("null", "[1, 2]", '"a string"'):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+        with pytest.raises(SystemExit) as exc:
+            drift.run_hook()
+        assert exc.value.code == 0
+
+
 def test_hook_due_tolerates_corrupt_talc():
     # Spec-sanctioned hand-edits can corrupt turns_at_last_compute; the Stop
     # hook must degrade (counter reads as 0), not crash every turn.
