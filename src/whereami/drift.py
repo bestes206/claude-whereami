@@ -20,6 +20,22 @@ MARKER_TTL = 150         # seconds; invariant: >= 2 * (CLI_TIMEOUT + SPAWN_SLOP)
 FAILURE_BACKOFF = 600    # seconds between retries after a parse failure
 SWEEP_AGE = 86400        # 1 day: opportunistic cleanup threshold
 
+# The stripped invocation (validated on CLI 2.1.172): drops ~29K of Claude
+# Code context to ~870 input tokens. Empty-string args are load-bearing and
+# version-brittle — see _stripped_supported's probe + fallback.
+STRIP_FLAGS = [
+    "--system-prompt",
+    "You are a JSON-only classifier. Reply with only the requested JSON "
+    "object, no prose.",
+    "--exclude-dynamic-system-prompt-sections",
+    "--strict-mcp-config",
+    "--setting-sources", "",
+    "--tools", "",
+]
+# MAX_THINKING_TOKENS=0 kills extended thinking (64 output tokens, ~1s).
+# DISABLE_INTERLEAVED_THINKING=1 does NOT — it only disables interleaving.
+THINKING_OFF_ENV = {"MAX_THINKING_TOKENS": "0"}
+
 
 def _invoke(args, env=None) -> Dict:
     """Low-level `claude` CLI call. Returns the FULL parsed JSON envelope
@@ -37,6 +53,24 @@ def _invoke(args, env=None) -> Dict:
         return envelope if isinstance(envelope, dict) else {}
     except (OSError, ValueError, subprocess.SubprocessError):
         return {}
+
+
+def _cli_version() -> str:
+    """`claude --version`, stripped, or '' if it can't be read. The caps-cache
+    key, so the probe re-runs across CLI upgrades/downgrades."""
+    try:
+        proc = subprocess.run(["claude", "--version"],
+                              capture_output=True, text=True, timeout=CLI_TIMEOUT)
+        return proc.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _build_argv(prompt: str, stripped: bool):
+    argv = ["claude", "-p", prompt, "--model", HAIKU_MODEL, "--output-format", "json"]
+    if stripped:
+        argv = argv + STRIP_FLAGS
+    return argv
 
 
 def _run_claude(prompt: str) -> str:

@@ -427,6 +427,41 @@ def test_invoke_subprocess_error_is_empty(monkeypatch):
     assert drift._invoke(["claude"], None) == {}
 
 
+def test_cli_version_returns_stripped_stdout(monkeypatch):
+    class FakeProc:
+        stdout = "2.1.172 (Claude Code)\n"
+
+    monkeypatch.setattr(drift.subprocess, "run", lambda *a, **k: FakeProc())
+    assert drift._cli_version() == "2.1.172 (Claude Code)"
+
+
+def test_cli_version_empty_on_error(monkeypatch):
+    def boom(*a, **k):
+        raise OSError()
+
+    monkeypatch.setattr(drift.subprocess, "run", boom)
+    assert drift._cli_version() == ""
+
+
+def test_build_argv_unstripped_is_todays_behavior():
+    argv = drift._build_argv("PROMPT", stripped=False)
+    assert argv == ["claude", "-p", "PROMPT",
+                    "--model", drift.HAIKU_MODEL, "--output-format", "json"]
+
+
+def test_build_argv_stripped_adds_all_six_flags():
+    argv = drift._build_argv("PROMPT", stripped=True)
+    assert argv[:7] == ["claude", "-p", "PROMPT", "--model", drift.HAIKU_MODEL,
+                        "--output-format", "json"]
+    assert "--exclude-dynamic-system-prompt-sections" in argv
+    assert "--strict-mcp-config" in argv
+    # empty-string args are load-bearing: --tools "" drops ~11K of tool schemas
+    assert argv[argv.index("--tools") + 1] == ""
+    assert argv[argv.index("--setting-sources") + 1] == ""
+    sp = argv[argv.index("--system-prompt") + 1]
+    assert "JSON-only classifier" in sp
+
+
 def test_persistent_parse_failure_suppresses_hook_spawns(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     p = _transcript(tmp_path)
