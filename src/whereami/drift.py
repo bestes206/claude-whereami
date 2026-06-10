@@ -36,6 +36,13 @@ STRIP_FLAGS = [
 # DISABLE_INTERLEAVED_THINKING=1 does NOT — it only disables interleaving.
 THINKING_OFF_ENV = {"MAX_THINKING_TOKENS": "0"}
 
+# A SMALL REASONING prompt, not {"ok": true}: a trivial reply is tiny whether
+# or not thinking is on, so it can't verify the thinking-off lever. This would
+# burn reasoning tokens if thinking were on; checked for low output_tokens, it
+# confirms the flags AND MAX_THINKING_TOKENS=0 in one shot.
+_PROBE_PROMPT = ('Reply with ONLY this JSON object, no prose: {"answer": <int>}. '
+                 "What is 17 times 4, minus 9?")
+
 
 def _invoke(args, env=None) -> Dict:
     """Low-level `claude` CLI call. Returns the FULL parsed JSON envelope
@@ -111,6 +118,40 @@ def _stripped_probe_ok(envelope: Dict) -> bool:
         return False
     tokens = _output_tokens(envelope)
     return tokens is not None and tokens < PROBE_MAX_OUTPUT_TOKENS
+
+
+def _stripped_supported(now: Optional[float] = None) -> bool:
+    """Decide stripped vs. unstripped for the current CLI version. Lazy,
+    version-keyed cache is the source of truth; probe only on a miss.
+
+    All-or-nothing fallback: if the stripped call fails for ANY reason, a
+    trivial unstripped call disambiguates flags-unsupported (cache False
+    permanently) from a broken/transient CLI (record probed_at, back off
+    FAILURE_BACKOFF so a logged-out/offline CLI doesn't fire two extra probe
+    calls every compute)."""
+    now = time.time() if now is None else now
+    version = _cli_version()
+    caps = cache.load_caps()
+    if caps.get("cli_version") == version:
+        if isinstance(caps.get("stripped_ok"), bool):
+            return caps["stripped_ok"]          # decided — no probe
+        probed = cache.ts_to_epoch(caps.get("probed_at"))
+        if probed is not None and 0 <= (now - probed) < FAILURE_BACKOFF:
+            return False                        # broken CLI cooling down
+    return _probe(version)
+
+
+def _probe(version: str) -> bool:
+    if _stripped_probe_ok(_invoke(_build_argv(_PROBE_PROMPT, True), THINKING_OFF_ENV)):
+        cache.save_caps({"cli_version": version, "stripped_ok": True})
+        return True
+    # Stripped failed. Does a trivial UNSTRIPPED call work? (Skip the token
+    # check — thinking is on here, so output is expected to be high.)
+    if _probe_json_ok(_invoke(_build_argv(_PROBE_PROMPT, False)).get("result")):
+        cache.save_caps({"cli_version": version, "stripped_ok": False})
+        return False
+    cache.save_caps({"cli_version": version, "probed_at": _now_iso()})
+    return False
 
 
 def _run_claude(prompt: str) -> str:

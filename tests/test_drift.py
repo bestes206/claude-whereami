@@ -494,6 +494,94 @@ def test_stripped_probe_ok_requires_json_AND_low_tokens():
         {"result": "thinking out loud", "usage": {"output_tokens": 5}}) is False
 
 
+def test_stripped_supported_cache_hit_skips_probe(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drift, "_cli_version", lambda: "2.1.172")
+    cache.save_caps({"cli_version": "2.1.172", "stripped_ok": True})
+
+    def no_probe(*a, **k):
+        raise AssertionError("must not probe on a cache hit")
+
+    monkeypatch.setattr(drift, "_invoke", no_probe)
+    assert drift._stripped_supported() is True
+
+
+def test_stripped_supported_cache_hit_false(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drift, "_cli_version", lambda: "1.0.0")
+    cache.save_caps({"cli_version": "1.0.0", "stripped_ok": False})
+
+    def no_probe(*a, **k):
+        raise AssertionError("must not probe on a cache hit")
+
+    monkeypatch.setattr(drift, "_invoke", no_probe)
+    assert drift._stripped_supported() is False
+
+
+def test_stripped_supported_probes_and_caches_true(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drift, "_cli_version", lambda: "2.1.172")
+    monkeypatch.setattr(drift, "_invoke",
+                        lambda args, env=None: {"result": '{"answer": 59}',
+                                                "usage": {"output_tokens": 20}})
+    assert drift._stripped_supported() is True
+    assert cache.load_caps() == {"cli_version": "2.1.172", "stripped_ok": True}
+
+
+def test_stripped_supported_flags_unsupported_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drift, "_cli_version", lambda: "1.0.0")
+    seq = iter([
+        {},  # stripped probe fails (old CLI rejects the flags)
+        {"result": '{"answer": 59}', "usage": {"output_tokens": 1500}},  # unstripped works
+    ])
+    monkeypatch.setattr(drift, "_invoke", lambda *a, **k: next(seq))
+    assert drift._stripped_supported() is False
+    assert cache.load_caps() == {"cli_version": "1.0.0", "stripped_ok": False}
+
+
+def test_stripped_supported_transient_failure_backs_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drift, "_cli_version", lambda: "2.1.172")
+    calls = []
+
+    def failing(*a, **k):
+        calls.append(a)
+        return {}
+
+    monkeypatch.setattr(drift, "_invoke", failing)
+    assert drift._stripped_supported() is False
+    assert len(calls) == 2   # stripped + unstripped disambiguation
+    caps = cache.load_caps()
+    assert caps.get("probed_at") and "stripped_ok" not in caps
+    # second compute within FAILURE_BACKOFF → reuse, do NOT re-probe
+    calls.clear()
+    assert drift._stripped_supported() is False
+    assert calls == []
+
+
+def test_stripped_supported_reprobes_after_cooldown(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drift, "_cli_version", lambda: "2.1.172")
+    stale = (datetime.now().astimezone()
+             - timedelta(seconds=drift.FAILURE_BACKOFF + 60)
+             ).isoformat(timespec="seconds")
+    cache.save_caps({"cli_version": "2.1.172", "probed_at": stale})
+    monkeypatch.setattr(drift, "_invoke",
+                        lambda *a, **k: {"result": '{"answer": 1}',
+                                         "usage": {"output_tokens": 10}})
+    assert drift._stripped_supported() is True   # cooldown elapsed → re-probe
+
+
+def test_stripped_supported_reprobes_on_version_change(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    cache.save_caps({"cli_version": "OLD", "stripped_ok": True})
+    monkeypatch.setattr(drift, "_cli_version", lambda: "NEW")
+    monkeypatch.setattr(drift, "_invoke", lambda *a, **k: {})   # both calls fail
+    assert drift._stripped_supported() is False
+    assert cache.load_caps().get("cli_version") == "NEW"
+
+
 def test_persistent_parse_failure_suppresses_hook_spawns(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     p = _transcript(tmp_path)
