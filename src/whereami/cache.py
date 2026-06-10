@@ -34,14 +34,26 @@ def caps_path() -> Path:
     return CACHE_DIR / "capabilities.json"
 
 
-def ts_to_epoch(value) -> Optional[float]:
-    """Parse a cache iso-8601 timestamp to epoch seconds; None if absent/garbage."""
+def parse_iso(value) -> Optional[datetime]:
+    """ISO-8601 string → datetime, normalizing a trailing 'Z' (UTC) to
+    '+00:00'. datetime.fromisoformat rejects bare 'Z' on Python 3.9/3.10, and
+    Claude Code transcript timestamps use the 'Z' form — without this, every
+    transcript gap routes to the unparseable path and silently disables the
+    idle trigger on the project's 3.9 floor. None if absent/garbage."""
     if not isinstance(value, str) or not value:
         return None
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(value).timestamp()
+        return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def ts_to_epoch(value) -> Optional[float]:
+    """Parse a cache iso-8601 timestamp to epoch seconds; None if absent/garbage."""
+    dt = parse_iso(value)
+    return dt.timestamp() if dt is not None else None
 
 
 def failure_epoch(data: Dict) -> Optional[float]:

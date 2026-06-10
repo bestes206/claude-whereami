@@ -141,3 +141,24 @@ def test_caps_save_leaves_no_tmp(tmp_path, monkeypatch):
     leftovers = [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
     assert leftovers == []
     assert cache.caps_path().name == "capabilities.json"
+
+
+def test_parse_iso_normalizes_trailing_z():
+    dt = cache.parse_iso("2026-06-10T21:42:50.649Z")
+    assert dt is not None
+    assert dt.utcoffset().total_seconds() == 0   # 'Z' parsed as UTC
+
+
+def test_parse_iso_offset_form_and_garbage():
+    assert cache.parse_iso("2026-06-09T10:00:00-07:00") is not None
+    assert cache.parse_iso(None) is None
+    assert cache.parse_iso("") is None
+    assert cache.parse_iso("garbage") is None
+    assert cache.parse_iso(12345) is None
+
+
+def test_ts_to_epoch_handles_literal_Z_suffix():
+    # THE Python 3.9/3.10 regression guard: datetime.fromisoformat rejects bare
+    # 'Z' before 3.11. Transcript timestamps use 'Z'; without normalization this
+    # returns None and silently disables the idle trigger on the 3.9 floor.
+    assert cache.ts_to_epoch("2026-06-10T21:42:50Z") is not None
