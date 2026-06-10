@@ -112,3 +112,20 @@ def test_render_degrades_to_one_line_without_message(tmp_path, monkeypatch):
                              "transcript_path": str(tmp_path / "none.jsonl")})
     assert "\n" not in out
     assert DIM + "…" + RESET in out
+
+
+def test_gist_segment_non_finite_score_is_placeholder():
+    assert statusline.gist_segment({"score": float("nan"), "gist": "x"}) == DIM + "…" + RESET
+    assert statusline.gist_segment({"score": float("inf"), "gist": "x"}) == DIM + "…" + RESET
+
+
+def test_main_never_breaks_on_hostile_payload(monkeypatch, capsys):
+    import io
+    import sys as _sys
+    for payload in ('{"cost": [1, 2]}',
+                    '{"session_id": null, "transcript_path": "/t"}',
+                    '{"cost": {"total_duration_ms": "abc"}}',
+                    'not json at all'):
+        monkeypatch.setattr(_sys, "stdin", io.StringIO(payload))
+        statusline.main()   # must not raise
+        assert capsys.readouterr().out.endswith("\n")

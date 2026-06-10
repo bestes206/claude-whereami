@@ -1,5 +1,6 @@
 # src/whereami/statusline.py
 import json
+import math
 import os
 import sys
 from typing import List, Optional
@@ -77,7 +78,8 @@ def gist_segment(cached: dict) -> str:
     Missing score OR gist (brand-new session, v1 cache) → dim placeholder."""
     score = cached.get("score")
     gist = cached.get("gist")
-    if not isinstance(score, (int, float)) or not isinstance(gist, str) or not gist:
+    if not isinstance(score, (int, float)) or not math.isfinite(score) \
+            or not isinstance(gist, str) or not gist:
         return _DIM + "…" + _RESET
     return _color_for(int(score)) + gist + _RESET
 
@@ -120,4 +122,9 @@ def main() -> None:
     except ValueError:
         print("")
         return
-    print(render(data))
+    try:
+        print(render(data))
+    except Exception:
+        # Rendering must never break the statusline: a hostile payload or
+        # corrupted cache degrades to a blank line, never a visible error.
+        print("")
