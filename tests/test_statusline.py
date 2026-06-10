@@ -405,6 +405,22 @@ def test_peek_triggers_recompute_when_gist_missing(tmp_path, monkeypatch):
     assert calls == ["s1"]
 
 
+def test_peek_recompute_gist_arm_survives_corrupt_talc(tmp_path, monkeypatch):
+    # hook_due checks the gist arm before the turn-delta; the renderer must
+    # too — a corrupt turns_at_last_compute (TypeError, swallowed) must not
+    # suppress the gist-arm recovery.
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    calls = []
+    _patch_spawn(monkeypatch, calls)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 42, "label": "v1", "ts": _iso(now - 60),
+                            "turns_at_last_compute": "nine"})
+    cache.save_turns("s1", 6)
+    statusline.render({"session_id": "s1", "transcript_path": "/t"}, now=now)
+    assert calls == ["s1"]
+
+
 def test_peek_no_recompute_when_fresh(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     calls = []
