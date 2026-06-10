@@ -86,3 +86,43 @@ def test_recent_turns_returns_last_n_human(tmp_path):
              for i in range(10)]
     p.write_text("\n".join(lines) + "\n")
     assert transcript.recent_turns(str(p), n=3) == ["ask 7", "ask 8", "ask 9"]
+
+
+def test_assistant_text_extracts_text_blocks():
+    entry = {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "text", "text": "Here is the fix."}]}}
+    assert transcript.assistant_text(entry) == "Here is the fix."
+
+
+def test_assistant_text_string_content():
+    entry = {"type": "assistant", "message": {"role": "assistant", "content": "plain answer"}}
+    assert transcript.assistant_text(entry) == "plain answer"
+
+
+def test_assistant_text_skips_user_sidechain_and_tooluse_only():
+    assert transcript.assistant_text(
+        {"type": "user", "message": {"role": "user", "content": "hi"}}) is None
+    assert transcript.assistant_text(
+        {"type": "assistant", "isSidechain": True,
+         "message": {"role": "assistant", "content": "x"}}) is None
+    tool_only = {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "name": "Bash", "input": {}}]}}
+    assert transcript.assistant_text(tool_only) is None
+
+
+def test_last_assistant_text_reads_from_end(tmp_path):
+    p = tmp_path / "t.jsonl"
+    lines = [
+        _line({"type": "assistant", "message": {"role": "assistant", "content": "old answer"}}),
+        _line({"type": "user", "message": {"role": "user", "content": "next ask"}}),
+        _line({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Bash", "input": {}}]}}),
+        _line({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "want me to proceed?"}]}}),
+    ]
+    p.write_text("\n".join(lines) + "\n")
+    assert transcript.last_assistant_text(str(p)) == "want me to proceed?"
+
+
+def test_last_assistant_text_missing_file_returns_none():
+    assert transcript.last_assistant_text("/no/such/file.jsonl") is None

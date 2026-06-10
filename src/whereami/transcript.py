@@ -85,6 +85,29 @@ def last_human_text(path: str) -> Optional[str]:
     return None
 
 
+def assistant_text(entry: dict) -> Optional[str]:
+    """Return the text of an assistant transcript entry, or None if it is not
+    a main-chain assistant turn (or has no text blocks, e.g. tool-use only)."""
+    if entry.get("type") != "assistant":
+        return None
+    if entry.get("isMeta") or entry.get("isSidechain"):
+        return None
+    msg = entry.get("message") or {}
+    text = _content_text(msg.get("content")).strip()
+    return text or None
+
+
+def last_assistant_text(path: str) -> Optional[str]:
+    for line in reversed(_tail_lines(path)):
+        entry = _parse(line)
+        if entry is None:
+            continue
+        text = assistant_text(entry)
+        if text:
+            return text
+    return None
+
+
 def opening_turns(path: str, n: int = 2) -> List[str]:
     out = []
     for line in _head_lines(path):
