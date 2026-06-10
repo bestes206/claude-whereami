@@ -60,52 +60,53 @@ reorientation tax every time you switch.
 
 ## Install
 
-### 1. The plugin
+### 1. Get whereami
+
+As a Claude Code plugin:
 
 ```
 /plugin marketplace add bestes206/claude-whereami
 /plugin install whereami@claude-whereami
 ```
 
-This wires the Stop hook (turn counting + throttled orientation computes)
-and the `/whereami` skill automatically. whereami is pure stdlib — no
-dependencies, no build step, Python 3.9+.
-
-### 2. The statusline (one manual settings edit)
-
-Plugins can't set the main statusline, so add this to
-`~/.claude/settings.json` yourself:
-
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "python3 \"$(ls -dt ~/.claude/plugins/cache/*/whereami/*/scripts/statusline.py | head -1)\"",
-    "refreshInterval": 3
-  }
-}
-```
-
-The `ls -dt … | head -1` picks the newest installed plugin version, so the
-wiring survives plugin updates. If you prefer an explicit path, use
-`~/.claude/plugins/cache/claude-whereami/whereami/<version>/scripts/statusline.py`
-and refresh it when the plugin updates.
-
-`refreshInterval: 3` matters: it re-runs the statusline on a timer, which is
-what lets the peek panel appear and collapse while the session is idle.
-Without it everything still works, but the panel only updates on
-conversation events.
-
-### 3. The peek hotkey (30 seconds)
-
-Peek is triggered by touching a file — no CLI, no daemon:
+Or standalone with pipx (or pip) straight from the repo:
 
 ```sh
-mkdir -p ~/.claude/whereami && touch ~/.claude/whereami/peek
+pipx install git+https://github.com/bestes206/claude-whereami
 ```
 
-Bind that one-liner to a hotkey (e.g. ⌥W) with Raycast, Hammerspoon, or
-anything that can run a shell command — paste-ready snippets in
+whereami is pure stdlib — no dependencies, no build step, Python 3.9+.
+
+### 2. Run the installer
+
+```sh
+whereami install
+```
+
+Installed as a plugin (so `whereami` isn't on your PATH)? Run the bundled
+copy instead — the glob picks the newest installed version:
+
+```sh
+python3 "$(ls -dt ~/.claude/plugins/cache/*/whereami/*/scripts/install.py | head -1)"
+```
+
+That one command does the rest:
+
+- **Statusline** — wires it into `~/.claude/settings.json` (backing the file up
+  first, and refusing to clobber a non-whereami statusline unless you pass
+  `--force`). It sets `refreshInterval: 3`, the timer that lets the peek panel
+  appear and collapse while a session is idle.
+- **Stop hook** — wired automatically (and skipped for plugin installs, which
+  already get it from the bundled hooks, so it never double-fires).
+- **Peek hotkey (⌥W)** — auto-detects **Hammerspoon** or **Raycast** and wires
+  the hotkey for you. With Hammerspoon it's fully automatic; with Raycast it
+  drops a script command and prints the one step to bind a key. If neither is
+  installed, it offers to install one (Hammerspoon recommended — it's the only
+  one that needs zero clicks).
+
+Useful flags: `--hotkey {auto,hammerspoon,raycast,none}`, `--force`,
+`--dry-run`, and `--no-input` / `--yes` for fully non-interactive (CI or agent)
+installs. Prefer to wire the hotkey by hand? Paste-ready snippets live in
 [docs/peek-hotkey.md](docs/peek-hotkey.md).
 
 ## How it works
@@ -142,9 +143,9 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/pytest -q   # 117 tests, all offline
 ```
 
-The editable install gives you `whereami-statusline` and `whereami-hook`
-console scripts; [`.claude/settings.example.json`](.claude/settings.example.json)
-shows the non-plugin wiring against a venv path. Tests stub the CLI and the
+The editable install gives you `whereami-statusline`, `whereami-hook`, and
+`whereami-install` console scripts; [`.claude/settings.example.json`](.claude/settings.example.json)
+shows the non-plugin wiring against a venv path (or just run `whereami install`). Tests stub the CLI and the
 clock — the suite never touches the network or your real cache.
 
 One deliberate duplication: `skills/whereami/SKILL.md` (shipped with the
