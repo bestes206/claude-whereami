@@ -115,13 +115,15 @@ installs. Prefer to wire the hotkey by hand? Paste-ready snippets live in
 ## How it works
 
 ```
-Stop hook ──every 6 turns──▶ detached sidecar ──one Haiku call──▶ cache
-                             (logged-in claude CLI)                 │
-statusline renderer ◀──reads cache + transcript tail, no network───┘
+Stop hook ──every 6 turns / on return from idle──▶ detached sidecar ──one Haiku call──▶ cache
+                                                   (logged-in claude CLI)                 │
+statusline renderer ◀──────reads cache + transcript tail, no network─────────────────────┘
 ```
 
-- A **Stop hook** counts turns. Every 6 turns (or on a stale peek) it spawns
-  a short-lived, detached sidecar process.
+- A **Stop hook** counts turns. Every 6 turns — or when you **return from
+  idle** (the gap between your last two messages crosses `WHEREAMI_IDLE_MIN`
+  minutes, default `10`), or on a stale peek — it spawns a short-lived,
+  detached sidecar process, so the gist is fresh the moment you come back.
 - The **sidecar** makes one Haiku call through your logged-in `claude` CLI
   and writes the result — score, gist, open loop, goal — to a per-session
   cache under `~/.claude/whereami/`. Model calls happen *only* in this
@@ -132,15 +134,28 @@ statusline renderer ◀──reads cache + transcript tail, no network───�
   statusline.
 
 **Cost:** orientation calls run on your Pro/Max subscription via the CLI — no
-API key, no per-call bill. Each compute is a single Haiku 4.5 call, but it
-carries Claude Code's full system context (~29K tokens, mostly prompt-cached)
-along with the short prompt — so it costs roughly **1–3¢** of subscription
-usage per compute (dropping toward sub-cent only when computes land back-to-back
-inside the prompt-cache window; measured ~2¢, 2026-06-10). The Stop hook
-recomputes at most once every 6 turns; peeking a session whose turns have
-advanced can trigger one extra refresh. A failure backoff caps a persistently
-broken CLI at ~6 retries/hour, and if a compute fails the last good orientation
-is kept and honestly ages ("scored 3h ago") rather than being papered over.
+API key, no per-call bill. Each compute is a single Haiku 4.5 call with a
+**stripped invocation**: it drops Claude Code's system context
+(`--tools ""`, `--exclude-dynamic-system-prompt-sections`, `--strict-mcp-config`,
+`--setting-sources ""`, a one-line classifier `--system-prompt`) and disables
+extended thinking (`MAX_THINKING_TOKENS=0`). Measured on the real orientation
+prompt (CLI 2.1.172, 2026-06-10), that takes a compute from roughly **~30,000
+tokens of context plus ~2,300 output tokens (mostly hidden thinking), ~23 s, and
+~3.8¢** down to **~1,300 input + ~33 output tokens, ~1 s of model time (~2 s
+end-to-end), and ~$0.0015 (≈0.15¢)** — about a 20× cut in tokens, latency, and
+per-call cost. (The stripped figures were stable across repeated runs; the
+unstripped baseline and subscription latency vary call to call.) An older CLI
+that doesn't accept the stripping flags is detected once per CLI version (cached
+in `~/.claude/whereami/capabilities.json`) and falls back to the full call
+automatically — no configuration, no error.
+
+The Stop hook recomputes at most once every 6 turns, plus once each time you
+return from idle (`WHEREAMI_IDLE_MIN` minutes away, default `10`; any
+non-positive or invalid value keeps the default); peeking a session whose turns
+have advanced can trigger one extra refresh. A failure backoff caps a
+persistently broken CLI at ~6 retries/hour, and if a compute fails the last good
+orientation is kept and honestly ages ("scored 3h ago") rather than being
+papered over.
 
 ## Development
 
@@ -148,7 +163,7 @@ is kept and honestly ages ("scored 3h ago") rather than being papered over.
 git clone https://github.com/bestes206/claude-whereami
 cd claude-whereami
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q   # 117 tests, all offline
+.venv/bin/pytest -q   # full suite, all offline
 ```
 
 The editable install gives you `whereami-statusline`, `whereami-hook`, and

@@ -291,7 +291,8 @@ def test_main_dry_run_writes_nothing(tmp_path, monkeypatch):
 def test_main_wires_statusline_and_creates_peek_dir(tmp_path, monkeypatch):
     home = _fake_home(tmp_path, monkeypatch)
     scripts = Path("/clone/scripts")
-    rc = install.main(["--hotkey", "none"], scripts_dir=scripts)
+    rc = install.main(["--hotkey", "none"], scripts_dir=scripts,
+                      warm=lambda out: None)
     assert rc == 0
     settings = json.loads((home / ".claude" / "settings.json").read_text())
     assert settings["statusLine"]["command"] == 'python3 "/clone/scripts/statusline.py"'
@@ -307,13 +308,42 @@ def test_main_backs_up_existing_settings_before_writing(tmp_path, monkeypatch):
     settings = home / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True)
     settings.write_text('{"theme": "dark"}')
-    install.main(["--hotkey", "none"], scripts_dir=Path("/clone/scripts"))
+    install.main(["--hotkey", "none"], scripts_dir=Path("/clone/scripts"),
+                 warm=lambda out: None)
     backup = settings.with_name("settings.json.bak-whereami")
     assert json.loads(backup.read_text()) == {"theme": "dark"}  # original preserved
     assert json.loads(settings.read_text())["theme"] == "dark"  # and carried forward
 
 
 # --- hammerspoon reload (graceful fallback) ------------------------------
+
+def test_main_warms_capability_probe(tmp_path, monkeypatch):
+    _fake_home(tmp_path, monkeypatch)
+    called = []
+    install.main(["--hotkey", "none"], scripts_dir=Path("/clone/scripts"),
+                 warm=lambda out: called.append(True))
+    assert called == [True]
+
+
+def test_main_dry_run_does_not_warm(tmp_path, monkeypatch):
+    _fake_home(tmp_path, monkeypatch)
+    called = []
+    install.main(["--dry-run", "--hotkey", "none"], scripts_dir=Path("/clone/scripts"),
+                 warm=lambda out: called.append(True))
+    assert called == []
+
+
+def test_warm_capabilities_never_raises(monkeypatch):
+    from whereami import drift
+
+    def boom():
+        raise RuntimeError("probe blew up")
+
+    monkeypatch.setattr(drift, "_stripped_supported", boom)
+    out = io.StringIO()
+    install._warm_capabilities(out)   # must not raise
+    assert "skipped" in out.getvalue()
+
 
 def test_reload_falls_back_to_manual_hint_when_cli_errors():
     # `hs` exists but the reload fails (Hammerspoon not running / no ipc) — show

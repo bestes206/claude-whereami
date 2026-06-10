@@ -114,3 +114,51 @@ def test_load_non_dict_json_returns_empty(tmp_path, monkeypatch):
     assert cache.load_cache("sess-1") == {}
     (tmp_path / "sess-1.json").write_text('"just a string"')
     assert cache.load_cache("sess-1") == {}
+
+
+def test_caps_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    cache.save_caps({"cli_version": "2.1.172", "stripped_ok": True})
+    assert cache.load_caps() == {"cli_version": "2.1.172", "stripped_ok": True}
+
+
+def test_caps_missing_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    assert cache.load_caps() == {}
+
+
+def test_caps_corrupt_or_non_dict_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    cache.caps_path().write_text("{not json")
+    assert cache.load_caps() == {}
+    cache.caps_path().write_text("[1, 2]")
+    assert cache.load_caps() == {}
+
+
+def test_caps_save_leaves_no_tmp(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    cache.save_caps({"cli_version": "x", "stripped_ok": False})
+    leftovers = [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+    assert leftovers == []
+    assert cache.caps_path().name == "capabilities.json"
+
+
+def test_parse_iso_normalizes_trailing_z():
+    dt = cache.parse_iso("2026-06-10T21:42:50.649Z")
+    assert dt is not None
+    assert dt.utcoffset().total_seconds() == 0   # 'Z' parsed as UTC
+
+
+def test_parse_iso_offset_form_and_garbage():
+    assert cache.parse_iso("2026-06-09T10:00:00-07:00") is not None
+    assert cache.parse_iso(None) is None
+    assert cache.parse_iso("") is None
+    assert cache.parse_iso("garbage") is None
+    assert cache.parse_iso(12345) is None
+
+
+def test_ts_to_epoch_handles_literal_Z_suffix():
+    # THE Python 3.9/3.10 regression guard: datetime.fromisoformat rejects bare
+    # 'Z' before 3.11. Transcript timestamps use 'Z'; without normalization this
+    # returns None and silently disables the idle trigger on the 3.9 floor.
+    assert cache.ts_to_epoch("2026-06-10T21:42:50Z") is not None

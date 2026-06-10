@@ -15,29 +15,170 @@ CLI_TIMEOUT = 60  # seconds: claude -p subprocess timeout
 THROTTLE_TURNS = 6
 ASSISTANT_TAIL_CHARS = 700
 
+
+def _read_idle_threshold() -> int:
+    """WHEREAMI_IDLE_MIN minutes → seconds. Bad/non-positive → 10-minute
+    default. Read at import; each Stop hook is a fresh process, so a changed
+    env var takes effect on the next turn."""
+    try:
+        minutes = int(os.environ.get("WHEREAMI_IDLE_MIN", "10"))
+    except (TypeError, ValueError):
+        return 600
+    return minutes * 60 if minutes > 0 else 600
+
+
+IDLE_THRESHOLD = _read_idle_threshold()
+
 SPAWN_SLOP = 15          # seconds: spawn + interpreter-startup allowance
 MARKER_TTL = 150         # seconds; invariant: >= 2 * (CLI_TIMEOUT + SPAWN_SLOP)
 FAILURE_BACKOFF = 600    # seconds between retries after a parse failure
 SWEEP_AGE = 86400        # 1 day: opportunistic cleanup threshold
 
+# The stripped invocation (measured on CLI 2.1.172, 2026-06-10): drops ~30K of
+# Claude Code context to ~1,300 input tokens. Empty-string args are load-bearing
+# and version-brittle — see _stripped_supported's probe + fallback.
+STRIP_FLAGS = [
+    "--system-prompt",
+    "You are a JSON-only classifier. Reply with only the requested JSON "
+    "object, no prose.",
+    "--exclude-dynamic-system-prompt-sections",
+    "--strict-mcp-config",
+    "--setting-sources", "",
+    "--tools", "",
+]
+# MAX_THINKING_TOKENS=0 kills extended thinking (measured ~33 output tokens,
+# ~1s of model time, vs ~2,300 output / ~23s with thinking on).
+# DISABLE_INTERLEAVED_THINKING=1 does NOT — it only disables interleaving.
+THINKING_OFF_ENV = {"MAX_THINKING_TOKENS": "0"}
 
-def _run_claude(prompt: str) -> str:
-    """Call Haiku via the logged-in `claude` CLI (uses the user's subscription,
-    no API key). Returns the model's text, or '' on any failure."""
+# A SMALL REASONING prompt, not {"ok": true}: a trivial reply is tiny whether
+# or not thinking is on, so it can't verify the thinking-off lever. This would
+# burn reasoning tokens if thinking were on; checked for low output_tokens, it
+# confirms the flags AND MAX_THINKING_TOKENS=0 in one shot.
+_PROBE_PROMPT = ('Reply with ONLY this JSON object, no prose: {"answer": <int>}. '
+                 "What is 17 times 4, minus 9?")
+
+
+def _invoke(args, env=None) -> Dict:
+    """Low-level `claude` CLI call. Returns the FULL parsed JSON envelope
+    (`result`, `usage`, …) or {} on any failure. `env`, when given, is merged
+    OVER the current environment (so MAX_THINKING_TOKENS=0 rides alongside the
+    inherited login/PATH); env=None inherits the parent verbatim — today's
+    behavior. Returning the whole envelope lets the probe read
+    usage.output_tokens for the thinking-off check."""
     try:
         proc = subprocess.run(
-            ["claude", "-p", prompt,
-             "--model", HAIKU_MODEL,
-             "--output-format", "json"],
-            capture_output=True, text=True, timeout=CLI_TIMEOUT,
+            args, capture_output=True, text=True, timeout=CLI_TIMEOUT,
+            env=(dict(os.environ, **env) if env else None),
         )
         envelope = json.loads(proc.stdout)
-        if not isinstance(envelope, dict):
-            return ""   # shape-changed envelope (risk E): degrade, never raise
-        result = envelope.get("result", "")
-        return result if isinstance(result, str) else ""
+        return envelope if isinstance(envelope, dict) else {}
     except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+
+
+def _cli_version() -> str:
+    """`claude --version`, stripped, or '' if it can't be read. The caps-cache
+    key, so the probe re-runs across CLI upgrades/downgrades."""
+    try:
+        proc = subprocess.run(["claude", "--version"],
+                              capture_output=True, text=True, timeout=CLI_TIMEOUT)
+        return proc.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
         return ""
+
+
+def _build_argv(prompt: str, stripped: bool):
+    argv = ["claude", "-p", prompt, "--model", HAIKU_MODEL, "--output-format", "json"]
+    if stripped:
+        argv = argv + STRIP_FLAGS
+    return argv
+
+
+PROBE_MAX_OUTPUT_TOKENS = 300
+
+
+def _probe_json_ok(result) -> bool:
+    """The probe's OWN parse check — deliberately NOT parse_orientation (which
+    requires score+gist and would reject a probe reply, mis-classifying every
+    CLI as unsupported). Just: is there a JSON OBJECT in the reply? Greedy regex
+    tolerates ```json fences and surrounding prose."""
+    if not isinstance(result, str):
+        return False
+    match = re.search(r"\{.*\}", result, re.DOTALL)
+    if not match:
+        return False
+    try:
+        return isinstance(json.loads(match.group(0)), dict)
+    except ValueError:
+        return False
+
+
+def _output_tokens(envelope: Dict) -> Optional[int]:
+    usage = envelope.get("usage")
+    if isinstance(usage, dict):
+        tokens = usage.get("output_tokens")
+        if isinstance(tokens, int) and not isinstance(tokens, bool):
+            return tokens
+    return None
+
+
+def _stripped_probe_ok(envelope: Dict) -> bool:
+    """Stripped probe passes iff the reply is parseable JSON AND output_tokens
+    is low. Low output is the thinking-off proof: a reasoning prompt with
+    thinking ON spikes output; if a future CLI ignores MAX_THINKING_TOKENS=0
+    the count spikes and the probe catches the regression instead of silently
+    paying the thinking tax. Missing usage → can't confirm → not ok."""
+    if not _probe_json_ok(envelope.get("result")):
+        return False
+    tokens = _output_tokens(envelope)
+    return tokens is not None and tokens < PROBE_MAX_OUTPUT_TOKENS
+
+
+def _stripped_supported(now: Optional[float] = None) -> bool:
+    """Decide stripped vs. unstripped for the current CLI version. Lazy,
+    version-keyed cache is the source of truth; probe only on a miss.
+
+    All-or-nothing fallback: if the stripped call fails for ANY reason, a
+    trivial unstripped call disambiguates flags-unsupported (cache False
+    permanently) from a broken/transient CLI (record probed_at, back off
+    FAILURE_BACKOFF so a logged-out/offline CLI doesn't fire two extra probe
+    calls every compute)."""
+    now = time.time() if now is None else now
+    version = _cli_version()
+    caps = cache.load_caps()
+    if caps.get("cli_version") == version:
+        if isinstance(caps.get("stripped_ok"), bool):
+            return caps["stripped_ok"]          # decided — no probe
+        probed = cache.ts_to_epoch(caps.get("probed_at"))
+        if probed is not None and 0 <= (now - probed) < FAILURE_BACKOFF:
+            return False                        # broken CLI cooling down
+    return _probe(version)
+
+
+def _probe(version: str) -> bool:
+    if _stripped_probe_ok(_invoke(_build_argv(_PROBE_PROMPT, True), THINKING_OFF_ENV)):
+        cache.save_caps({"cli_version": version, "stripped_ok": True})
+        return True
+    # Stripped failed. Does a trivial UNSTRIPPED call work? (Skip the token
+    # check — thinking is on here, so output is expected to be high.)
+    if _probe_json_ok(_invoke(_build_argv(_PROBE_PROMPT, False)).get("result")):
+        cache.save_caps({"cli_version": version, "stripped_ok": False})
+        return False
+    cache.save_caps({"cli_version": version, "probed_at": _now_iso()})
+    return False
+
+
+def _run_claude(prompt: str) -> str:
+    """Call Haiku via the logged-in `claude` CLI (subscription, no API key).
+    Stripped argv + thinking-off when the CLI supports it (measured ~1,300 in /
+    ~33 out, ~1s model time / ~2s end-to-end); otherwise today's unstripped
+    call, verbatim. Returns the model's text, or '' on any failure."""
+    stripped = _stripped_supported()
+    envelope = _invoke(_build_argv(prompt, stripped),
+                       THINKING_OFF_ENV if stripped else None)
+    result = envelope.get("result", "")
+    return result if isinstance(result, str) else ""
 
 
 def _now_iso() -> str:
@@ -84,7 +225,7 @@ def compute(session_id: str, transcript_path: str,
     cache.save_cache(session_id, data)
 
 
-def hook_due(data: Dict, turns: int) -> bool:
+def hook_due(data: Dict, turns: int, idle_returned: bool = False) -> bool:
     if not data.get("ts"):
         return True
     if not data.get("gist"):
@@ -92,7 +233,9 @@ def hook_due(data: Dict, turns: int) -> bool:
     delta = turns - cache.turns_at_last_compute(data)
     # Negative delta = a reset/lost .turns file behind a surviving cache:
     # inconsistent state is due, not "fresh for the next 45 turns".
-    return delta >= THROTTLE_TURNS or delta < 0
+    # idle_returned = the user came back after >= WHEREAMI_IDLE_MIN away: refresh
+    # the gist on return, additive to the periodic cadence.
+    return delta >= THROTTLE_TURNS or delta < 0 or idle_returned
 
 
 def peek_due(data: Dict, turns: int) -> bool:
@@ -102,6 +245,22 @@ def peek_due(data: Dict, turns: int) -> bool:
     if not data.get("gist"):
         return True
     return turns != cache.turns_at_last_compute(data)
+
+
+def returned_from_idle(path: str, threshold_seconds: int) -> bool:
+    """True iff the gap between the last two genuine human turns ≥ threshold —
+    i.e. the user was away ≥ threshold before the turn that just completed.
+    False when fewer than two human turns exist or timestamps are unparseable;
+    the periodic cadence still covers those cases. Never raises (the Stop hook
+    must exit 0)."""
+    stamps = transcript.human_turn_timestamps(path, n=2)
+    if len(stamps) < 2:
+        return False
+    try:
+        gap = (stamps[0] - stamps[1]).total_seconds()
+    except (TypeError, OverflowError):
+        return False   # mixed naive/aware datetimes — degrade, don't crash
+    return gap >= threshold_seconds
 
 
 def run_hook() -> None:
@@ -117,7 +276,8 @@ def run_hook() -> None:
         sys.exit(0)
     turns = cache.increment_turns(session_id)
     data = cache.load_cache(session_id)
-    if hook_due(data, turns):
+    idle_returned = returned_from_idle(transcript_path, IDLE_THRESHOLD)
+    if hook_due(data, turns, idle_returned):
         maybe_spawn_compute(session_id, transcript_path, data=data)
     sweep_stale_files()
     sys.exit(0)

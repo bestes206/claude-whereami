@@ -126,3 +126,51 @@ def test_last_assistant_text_reads_from_end(tmp_path):
 
 def test_last_assistant_text_missing_file_returns_none():
     assert transcript.last_assistant_text("/no/such/file.jsonl") is None
+
+
+def _ts_line(obj, ts):
+    obj = dict(obj)
+    obj["timestamp"] = ts
+    return json.dumps(obj)
+
+
+def test_human_turn_timestamps_skips_tool_results(tmp_path):
+    # type=="user" is overwhelmingly tool_result envelopes; filtering on that
+    # alone would pick two adjacent tool-results seconds apart and idle would
+    # never fire. Must filter via human_text() like the rest of the module.
+    p = tmp_path / "t.jsonl"
+    lines = [
+        _ts_line({"type": "user", "message": {"role": "user", "content": "first ask"}},
+                 "2026-06-10T21:00:00Z"),
+        _ts_line({"type": "assistant", "message": {"role": "assistant", "content": "ok"}},
+                 "2026-06-10T21:00:05Z"),
+        _ts_line({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "out"}]}}, "2026-06-10T21:00:06Z"),
+        _ts_line({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "out2"}]}}, "2026-06-10T21:00:07Z"),
+        _ts_line({"type": "user", "message": {"role": "user", "content": "second ask"}},
+                 "2026-06-10T21:20:00Z"),
+    ]
+    p.write_text("\n".join(lines) + "\n")
+    stamps = transcript.human_turn_timestamps(str(p), n=2)
+    assert len(stamps) == 2
+    # most-recent-first → positive gap; 21:20 − 21:00, NOT the 1s tool-result gap
+    assert (stamps[0] - stamps[1]).total_seconds() == 20 * 60
+
+
+def test_human_turn_timestamps_skips_garbage_timestamps(tmp_path):
+    p = tmp_path / "t.jsonl"
+    lines = [
+        _ts_line({"type": "user", "message": {"role": "user", "content": "a"}},
+                 "2026-06-10T21:00:00Z"),
+        _ts_line({"type": "user", "message": {"role": "user", "content": "b"}}, "nope"),
+        _ts_line({"type": "user", "message": {"role": "user", "content": "c"}},
+                 "2026-06-10T21:05:00Z"),
+    ]
+    p.write_text("\n".join(lines) + "\n")
+    stamps = transcript.human_turn_timestamps(str(p), n=2)
+    assert len(stamps) == 2   # 'b' (garbage ts) skipped; 'c' then 'a'
+
+
+def test_human_turn_timestamps_missing_file_is_empty(tmp_path):
+    assert transcript.human_turn_timestamps(str(tmp_path / "none.jsonl")) == []

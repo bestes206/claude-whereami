@@ -2,7 +2,7 @@ import io
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from whereami import cache, drift
 
@@ -372,6 +372,358 @@ def test_hook_survives_non_dict_cache_json(tmp_path, monkeypatch):
                                  "transcript_path": str(tmp_path / "t.jsonl")}, spawned)
     assert cache.load_turns("s1") == 1   # hook completed; no raise
     assert len(spawned) == 1             # treated as no-cache → due
+
+
+def test_invoke_returns_full_envelope_and_passes_args(monkeypatch):
+    captured = {}
+
+    class FakeProc:
+        stdout = '{"result": "hi", "usage": {"output_tokens": 7}}'
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        captured["env"] = kwargs.get("env")
+        return FakeProc()
+
+    monkeypatch.setattr(drift.subprocess, "run", fake_run)
+    env = drift._invoke(["claude", "-p", "x"], {"MAX_THINKING_TOKENS": "0"})
+    assert env == {"result": "hi", "usage": {"output_tokens": 7}}
+    assert captured["args"] == ["claude", "-p", "x"]
+    assert captured["env"]["MAX_THINKING_TOKENS"] == "0"
+    assert "PATH" in captured["env"]   # merged OVER os.environ, not replaced
+
+
+def test_invoke_none_env_inherits_parent(monkeypatch):
+    captured = {}
+
+    class FakeProc:
+        stdout = '{"result": "ok"}'
+
+    def fake_run(args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return FakeProc()
+
+    monkeypatch.setattr(drift.subprocess, "run", fake_run)
+    drift._invoke(["claude"], None)
+    assert captured["env"] is None   # today's behavior: inherit verbatim
+
+
+def test_invoke_degrades_to_empty_dict(monkeypatch):
+    class FakeProc:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    for stdout in ("[1, 2]", "null", "not json", ""):
+        monkeypatch.setattr(drift.subprocess, "run",
+                            lambda *a, stdout=stdout, **k: FakeProc(stdout))
+        assert drift._invoke(["claude"], None) == {}
+
+
+def test_invoke_subprocess_error_is_empty(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("no claude")
+
+    monkeypatch.setattr(drift.subprocess, "run", boom)
+    assert drift._invoke(["claude"], None) == {}
+
+
+def test_cli_version_returns_stripped_stdout(monkeypatch):
+    class FakeProc:
+        stdout = "2.1.172 (Claude Code)\n"
+
+    monkeypatch.setattr(drift.subprocess, "run", lambda *a, **k: FakeProc())
+    assert drift._cli_version() == "2.1.172 (Claude Code)"
+
+
+def test_cli_version_empty_on_error(monkeypatch):
+    def boom(*a, **k):
+        raise OSError()
+
+    monkeypatch.setattr(drift.subprocess, "run", boom)
+    assert drift._cli_version() == ""
+
+
+def test_build_argv_unstripped_is_todays_behavior():
+    argv = drift._build_argv("PROMPT", stripped=False)
+    assert argv == ["claude", "-p", "PROMPT",
+                    "--model", drift.HAIKU_MODEL, "--output-format", "json"]
+
+
+def test_build_argv_stripped_adds_all_six_flags():
+    argv = drift._build_argv("PROMPT", stripped=True)
+    assert argv[:7] == ["claude", "-p", "PROMPT", "--model", drift.HAIKU_MODEL,
+                        "--output-format", "json"]
+    assert "--exclude-dynamic-system-prompt-sections" in argv
+    assert "--strict-mcp-config" in argv
+    # empty-string args are load-bearing: --tools "" drops ~11K of tool schemas
+    assert argv[argv.index("--tools") + 1] == ""
+    assert argv[argv.index("--setting-sources") + 1] == ""
+    sp = argv[argv.index("--system-prompt") + 1]
+    assert "JSON-only classifier" in sp
+
+
+def test_probe_json_ok_accepts_object_and_fences():
+    assert drift._probe_json_ok('{"answer": 59}') is True
+    assert drift._probe_json_ok('```json\n{"answer": 59}\n```') is True
+    assert drift._probe_json_ok('here: {"answer": 59} done') is True
+
+
+def test_probe_json_ok_rejects_non_object():
+    assert drift._probe_json_ok("sorry, no JSON") is False
+    assert drift._probe_json_ok(None) is False
+    assert drift._probe_json_ok("[1, 2]") is False   # array is not an object
+
+
+def test_output_tokens_reads_usage():
+    assert drift._output_tokens({"usage": {"output_tokens": 42}}) == 42
+    assert drift._output_tokens({}) is None
+    assert drift._output_tokens({"usage": {}}) is None
+    assert drift._output_tokens({"usage": {"output_tokens": True}}) is None  # bool
+
+
+def test_stripped_probe_ok_requires_json_AND_low_tokens():
+    ok = {"result": '{"answer": 59}', "usage": {"output_tokens": 20}}
+    assert drift._stripped_probe_ok(ok) is True
+    # thinking still on → output spikes → reject even though JSON parses
+    hot = {"result": '{"answer": 59}', "usage": {"output_tokens": 2025}}
+    assert drift._stripped_probe_ok(hot) is False
+    # no usage → can't confirm thinking-off → reject
+    assert drift._stripped_probe_ok({"result": '{"answer": 59}'}) is False
+    # not parseable → reject
+    assert drift._stripped_probe_ok(
+        {"result": "thinking out loud", "usage": {"output_tokens": 5}}) is False
+
+
+def test_stripped_supported_cache_hit_skips_probe(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drift, "_cli_version", lambda: "2.1.172")
+    cache.save_caps({"cli_version": "2.1.172", "stripped_ok": True})
+
+    def no_probe(*a, **k):
+        raise AssertionError("must not probe on a cache hit")
+
+    monkeypatch.setattr(drift, "_invoke", no_probe)
+    assert drift._stripped_supported() is True
+
+
+def test_stripped_supported_cache_hit_false(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drift, "_cli_version", lambda: "1.0.0")
+    cache.save_caps({"cli_version": "1.0.0", "stripped_ok": False})
+
+    def no_probe(*a, **k):
+        raise AssertionError("must not probe on a cache hit")
+
+    monkeypatch.setattr(drift, "_invoke", no_probe)
+    assert drift._stripped_supported() is False
+
+
+def test_stripped_supported_probes_and_caches_true(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drift, "_cli_version", lambda: "2.1.172")
+    monkeypatch.setattr(drift, "_invoke",
+                        lambda args, env=None: {"result": '{"answer": 59}',
+                                                "usage": {"output_tokens": 20}})
+    assert drift._stripped_supported() is True
+    assert cache.load_caps() == {"cli_version": "2.1.172", "stripped_ok": True}
+
+
+def test_stripped_supported_flags_unsupported_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drift, "_cli_version", lambda: "1.0.0")
+    seq = iter([
+        {},  # stripped probe fails (old CLI rejects the flags)
+        {"result": '{"answer": 59}', "usage": {"output_tokens": 1500}},  # unstripped works
+    ])
+    monkeypatch.setattr(drift, "_invoke", lambda *a, **k: next(seq))
+    assert drift._stripped_supported() is False
+    assert cache.load_caps() == {"cli_version": "1.0.0", "stripped_ok": False}
+
+
+def test_stripped_supported_transient_failure_backs_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drift, "_cli_version", lambda: "2.1.172")
+    calls = []
+
+    def failing(*a, **k):
+        calls.append(a)
+        return {}
+
+    monkeypatch.setattr(drift, "_invoke", failing)
+    assert drift._stripped_supported() is False
+    assert len(calls) == 2   # stripped + unstripped disambiguation
+    caps = cache.load_caps()
+    assert caps.get("probed_at") and "stripped_ok" not in caps
+    # second compute within FAILURE_BACKOFF → reuse, do NOT re-probe
+    calls.clear()
+    assert drift._stripped_supported() is False
+    assert calls == []
+
+
+def test_stripped_supported_reprobes_after_cooldown(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drift, "_cli_version", lambda: "2.1.172")
+    stale = (datetime.now().astimezone()
+             - timedelta(seconds=drift.FAILURE_BACKOFF + 60)
+             ).isoformat(timespec="seconds")
+    cache.save_caps({"cli_version": "2.1.172", "probed_at": stale})
+    monkeypatch.setattr(drift, "_invoke",
+                        lambda *a, **k: {"result": '{"answer": 1}',
+                                         "usage": {"output_tokens": 10}})
+    assert drift._stripped_supported() is True   # cooldown elapsed → re-probe
+
+
+def test_stripped_supported_reprobes_on_version_change(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    cache.save_caps({"cli_version": "OLD", "stripped_ok": True})
+    monkeypatch.setattr(drift, "_cli_version", lambda: "NEW")
+    monkeypatch.setattr(drift, "_invoke", lambda *a, **k: {})   # both calls fail
+    assert drift._stripped_supported() is False
+    assert cache.load_caps().get("cli_version") == "NEW"
+
+
+def test_run_claude_uses_stripped_when_supported(monkeypatch):
+    monkeypatch.setattr(drift, "_stripped_supported", lambda: True)
+    captured = {}
+
+    def fake_invoke(args, env=None):
+        captured["args"] = args
+        captured["env"] = env
+        return {"result": '{"score": 1, "gist": "x"}'}
+
+    monkeypatch.setattr(drift, "_invoke", fake_invoke)
+    assert drift._run_claude("PROMPT") == '{"score": 1, "gist": "x"}'
+    assert "--tools" in captured["args"]
+    assert captured["env"] == {"MAX_THINKING_TOKENS": "0"}
+
+
+def test_run_claude_uses_unstripped_when_unsupported(monkeypatch):
+    monkeypatch.setattr(drift, "_stripped_supported", lambda: False)
+    captured = {}
+
+    def fake_invoke(args, env=None):
+        captured["args"] = args
+        captured["env"] = env
+        return {"result": "reply"}
+
+    monkeypatch.setattr(drift, "_invoke", fake_invoke)
+    assert drift._run_claude("PROMPT") == "reply"
+    assert captured["args"] == ["claude", "-p", "PROMPT", "--model",
+                                drift.HAIKU_MODEL, "--output-format", "json"]
+    assert captured["env"] is None   # today's behavior verbatim: no env override
+
+
+def test_run_claude_non_str_result_is_empty(monkeypatch):
+    monkeypatch.setattr(drift, "_stripped_supported", lambda: True)
+    monkeypatch.setattr(drift, "_invoke", lambda *a, **k: {"result": {"x": 1}})
+    assert drift._run_claude("PROMPT") == ""
+
+
+def _ts(obj, timestamp):
+    obj = dict(obj)
+    obj["timestamp"] = timestamp
+    return json.dumps(obj)
+
+
+def _idle_transcript(tmp_path, gap_seconds):
+    base = datetime(2026, 6, 10, 21, 0, 0, tzinfo=timezone.utc)
+    later = base + timedelta(seconds=gap_seconds)
+    z = lambda d: d.isoformat().replace("+00:00", "Z")   # exercise Z-normalization
+    p = tmp_path / "idle.jsonl"
+    p.write_text("\n".join([
+        _ts({"type": "user", "message": {"role": "user", "content": "first ask"}}, z(base)),
+        _ts({"type": "assistant", "message": {"role": "assistant", "content": "ok"}}, z(base)),
+        _ts({"type": "user", "message": {"role": "user", "content": "second ask"}}, z(later)),
+    ]) + "\n")
+    return p
+
+
+def test_returned_from_idle_true_when_gap_exceeds(tmp_path):
+    p = _idle_transcript(tmp_path, gap_seconds=20 * 60)
+    assert drift.returned_from_idle(str(p), threshold_seconds=10 * 60) is True
+
+
+def test_returned_from_idle_false_when_gap_small(tmp_path):
+    p = _idle_transcript(tmp_path, gap_seconds=60)
+    assert drift.returned_from_idle(str(p), threshold_seconds=10 * 60) is False
+
+
+def test_returned_from_idle_false_with_fewer_than_two_human_turns(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text(_ts({"type": "user", "message": {"role": "user",
+                  "content": "only ask"}}, "2026-06-10T21:00:00Z") + "\n")
+    assert drift.returned_from_idle(str(p), 600) is False
+
+
+def test_returned_from_idle_false_on_missing_file(tmp_path):
+    assert drift.returned_from_idle(str(tmp_path / "none.jsonl"), 600) is False
+
+
+def test_long_agent_turn_trips_idle_gap(tmp_path):
+    # The human-to-human gap includes the previous agent turn's runtime: a long
+    # autonomous run crosses the threshold with no human idleness. Benign by
+    # design — a gist from before a long run is exactly the kind that's stale.
+    p = tmp_path / "t.jsonl"
+    lines = [
+        _ts({"type": "user", "message": {"role": "user", "content": "go"}},
+            "2026-06-10T21:00:00Z"),
+        _ts({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "..."}]}}, "2026-06-10T21:04:00Z"),
+        _ts({"type": "user", "message": {"role": "user", "content": "next"}},
+            "2026-06-10T21:08:00Z"),
+    ]
+    p.write_text("\n".join(lines) + "\n")
+    assert drift.returned_from_idle(str(p), threshold_seconds=10 * 60) is False
+    assert drift.returned_from_idle(str(p), threshold_seconds=5 * 60) is True
+
+
+def test_read_idle_threshold_default_and_overrides(monkeypatch):
+    monkeypatch.delenv("WHEREAMI_IDLE_MIN", raising=False)
+    assert drift._read_idle_threshold() == 600
+    monkeypatch.setenv("WHEREAMI_IDLE_MIN", "5")
+    assert drift._read_idle_threshold() == 300
+    monkeypatch.setenv("WHEREAMI_IDLE_MIN", "0")
+    assert drift._read_idle_threshold() == 600    # non-positive → default
+    monkeypatch.setenv("WHEREAMI_IDLE_MIN", "-3")
+    assert drift._read_idle_threshold() == 600
+    monkeypatch.setenv("WHEREAMI_IDLE_MIN", "garbage")
+    assert drift._read_idle_threshold() == 600
+
+
+def test_hook_due_idle_returned_forces_due():
+    data = {"ts": "2026-06-09T10:00:00-07:00", "gist": "parser work",
+            "turns_at_last_compute": 5}
+    assert drift.hook_due(data, 6) is False                       # delta 1 < 6
+    assert drift.hook_due(data, 6, idle_returned=True) is True    # idle forces due
+
+
+def test_hook_due_default_idle_param_keeps_existing_behavior():
+    data = {"ts": "x", "gist": "g", "turns_at_last_compute": 5}
+    assert drift.hook_due(data, 6) is False   # 3-arg call still valid (no churn)
+
+
+def test_hook_spawns_on_idle_return_below_throttle(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    p = _idle_transcript(tmp_path, gap_seconds=20 * 60)   # > default 10 min
+    cache.save_turns("s1", 5)
+    cache.save_cache("s1", {"ts": "2026-06-09T10:00:00-07:00", "gist": "g",
+                            "turns_at_last_compute": 5})
+    spawned = []
+    payload = {"session_id": "s1", "transcript_path": str(p)}
+    _run_hook_with(monkeypatch, payload, spawned)   # turns 5→6, cadence not due
+    assert len(spawned) == 1   # spawned via the idle-return arm
+
+
+def test_hook_no_idle_spawn_when_gap_small(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    p = _idle_transcript(tmp_path, gap_seconds=60)
+    cache.save_turns("s1", 5)
+    cache.save_cache("s1", {"ts": "2026-06-09T10:00:00-07:00", "gist": "g",
+                            "turns_at_last_compute": 5})
+    spawned = []
+    payload = {"session_id": "s1", "transcript_path": str(p)}
+    _run_hook_with(monkeypatch, payload, spawned)
+    assert spawned == []   # small gap + cadence not due → no spawn
 
 
 def test_persistent_parse_failure_suppresses_hook_spawns(tmp_path, monkeypatch):
