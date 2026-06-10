@@ -119,6 +119,12 @@ def test_gist_segment_non_finite_score_is_placeholder():
     assert statusline.gist_segment({"score": float("inf"), "gist": "x"}) == DIM + "…" + RESET
 
 
+def test_gist_segment_bool_score_is_placeholder():
+    # bool subclasses int: a true/false score is cache garbage, not a green 1.
+    assert statusline.gist_segment({"score": True, "gist": "x"}) == DIM + "…" + RESET
+    assert statusline.gist_segment({"score": False, "gist": "x"}) == DIM + "…" + RESET
+
+
 def test_main_never_breaks_on_hostile_payload(monkeypatch, capsys):
     import io
     import sys as _sys
@@ -300,6 +306,16 @@ def test_peek_v1_cache_renders_placeholder(tmp_path, monkeypatch):
     _touch_peek(tmp_path, now)
     cache.save_cache("s1", {"score": 42, "label": "v1 label", "ts": _iso(now - 60),
                             "turns_seen": 9, "turns_at_last_compute": 9})
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    assert out.split("\n")[0] == DIM + "…" + RESET
+
+
+def test_peek_bool_score_degrades_to_placeholder(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": True, "gist": "parser work",
+                            "ts": _iso(now - 60)})
     out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
     assert out.split("\n")[0] == DIM + "…" + RESET
 

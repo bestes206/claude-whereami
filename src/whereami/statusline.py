@@ -94,14 +94,25 @@ def _clean(value) -> str:
     return _collapse(value)
 
 
+def _score_value(cached: dict) -> Optional[int]:
+    """The cache score as an int, or None if it isn't a real finite number —
+    bool subclasses int and must not pass as a score."""
+    score = cached.get("score")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        return None
+    if not math.isfinite(score):
+        return None
+    return int(score)
+
+
 def gist_segment(cached: dict) -> str:
     """The gist in colored words — a written message, not a colored glyph.
     Missing score OR gist (brand-new session, v1 cache) → dim placeholder."""
-    score = cached.get("score")
+    score = _score_value(cached)
     gist = _clean(cached.get("gist"))
-    if not isinstance(score, (int, float)) or not math.isfinite(score) or not gist:
+    if score is None or not gist:
         return _DIM + "…" + _RESET
-    return _color_for(int(score)) + gist + _RESET
+    return _color_for(score) + gist + _RESET
 
 
 def _gauges(data: dict) -> List[str]:
@@ -174,10 +185,8 @@ def failure_segment(cached: dict, now: float) -> Optional[str]:
 
 
 def split_hint(cached: dict, ctx_pct: Optional[int]) -> bool:
-    score = cached.get("score")
-    if not isinstance(score, (int, float)):
-        return False
-    if not math.isfinite(score):
+    score = _score_value(cached)
+    if score is None:
         return False
     if score > SPLIT_SCORE:
         return True   # fully drifted, even with low context
@@ -226,11 +235,10 @@ def open_loop_line(cached: dict, turns: int) -> Optional[str]:
 
 def render_peek(data: dict, cached: dict, last: Optional[str],
                 turns: int, now: float) -> str:
-    score = cached.get("score")
+    score = _score_value(cached)
     gist = _clean(cached.get("gist"))
-    scored = isinstance(score, (int, float)) and math.isfinite(score) and bool(gist)
-    if scored:
-        head = _color_for(int(score)) + "drift {} · {}".format(int(score), gist) + _RESET
+    if score is not None and gist:
+        head = _color_for(score) + "drift {} · {}".format(score, gist) + _RESET
         goal = truncate(_clean(cached.get("goal")) or _clean(cached.get("opening_goal")),
                         GOAL_PAREN_LIMIT)
         if goal:
