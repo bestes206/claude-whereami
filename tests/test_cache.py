@@ -95,3 +95,11 @@ def test_ts_to_epoch():
     e1 = cache.ts_to_epoch("2026-06-09T10:00:00-07:00")
     e2 = cache.ts_to_epoch("2026-06-09T10:05:00-07:00")
     assert e1 is not None and e2 is not None and e2 - e1 == 300
+
+
+def test_load_non_dict_json_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    (tmp_path / "sess-1.json").write_text("[1, 2, 3]")
+    assert cache.load_cache("sess-1") == {}
+    (tmp_path / "sess-1.json").write_text('"just a string"')
+    assert cache.load_cache("sess-1") == {}

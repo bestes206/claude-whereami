@@ -5,7 +5,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, Optional
 
 from . import cache, transcript
 

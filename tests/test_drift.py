@@ -275,6 +275,16 @@ def test_hook_goes_through_guard(tmp_path, monkeypatch):
     assert cache.marker_path("s1").exists()   # spawn went through the marker guard
 
 
+def test_hook_survives_non_dict_cache_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    (tmp_path / "s1.json").write_text("[1, 2, 3]")   # hand-edit gone wrong
+    spawned = []
+    _run_hook_with(monkeypatch, {"session_id": "s1",
+                                 "transcript_path": str(tmp_path / "t.jsonl")}, spawned)
+    assert cache.load_turns("s1") == 1   # hook completed; no raise
+    assert len(spawned) == 1             # treated as no-cache → due
+
+
 def test_persistent_parse_failure_suppresses_hook_spawns(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     p = _transcript(tmp_path)

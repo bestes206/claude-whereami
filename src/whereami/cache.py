@@ -60,9 +60,12 @@ def _atomic_write(target: Path, text: str) -> None:
 def load_cache(session_id: str) -> Dict:
     try:
         with open(_path(session_id), "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (OSError, ValueError):
         return {}
+    # The spec sanctions hand-editing this file (goal escape hatch); a non-dict
+    # must degrade to "no cache", never raise out of the hook or renderer.
+    return data if isinstance(data, dict) else {}
 
 
 def save_cache(session_id: str, data: Dict) -> None:
