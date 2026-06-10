@@ -15,6 +15,20 @@ CLI_TIMEOUT = 60  # seconds: claude -p subprocess timeout
 THROTTLE_TURNS = 6
 ASSISTANT_TAIL_CHARS = 700
 
+
+def _read_idle_threshold() -> int:
+    """WHEREAMI_IDLE_MIN minutes → seconds. Bad/non-positive → 10-minute
+    default. Read at import; each Stop hook is a fresh process, so a changed
+    env var takes effect on the next turn."""
+    try:
+        minutes = int(os.environ.get("WHEREAMI_IDLE_MIN", "10"))
+    except (TypeError, ValueError):
+        return 600
+    return minutes * 60 if minutes > 0 else 600
+
+
+IDLE_THRESHOLD = _read_idle_threshold()
+
 SPAWN_SLOP = 15          # seconds: spawn + interpreter-startup allowance
 MARKER_TTL = 150         # seconds; invariant: >= 2 * (CLI_TIMEOUT + SPAWN_SLOP)
 FAILURE_BACKOFF = 600    # seconds between retries after a parse failure
@@ -228,6 +242,22 @@ def peek_due(data: Dict, turns: int) -> bool:
     if not data.get("gist"):
         return True
     return turns != cache.turns_at_last_compute(data)
+
+
+def returned_from_idle(path: str, threshold_seconds: int) -> bool:
+    """True iff the gap between the last two genuine human turns ≥ threshold —
+    i.e. the user was away ≥ threshold before the turn that just completed.
+    False when fewer than two human turns exist or timestamps are unparseable;
+    the periodic cadence still covers those cases. Never raises (the Stop hook
+    must exit 0)."""
+    stamps = transcript.human_turn_timestamps(path, n=2)
+    if len(stamps) < 2:
+        return False
+    try:
+        gap = (stamps[0] - stamps[1]).total_seconds()
+    except (TypeError, OverflowError):
+        return False   # mixed naive/aware datetimes — degrade, don't crash
+    return gap >= threshold_seconds
 
 
 def run_hook() -> None:

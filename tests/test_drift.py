@@ -2,7 +2,7 @@ import io
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from whereami import cache, drift
 
@@ -617,6 +617,77 @@ def test_run_claude_non_str_result_is_empty(monkeypatch):
     monkeypatch.setattr(drift, "_stripped_supported", lambda: True)
     monkeypatch.setattr(drift, "_invoke", lambda *a, **k: {"result": {"x": 1}})
     assert drift._run_claude("PROMPT") == ""
+
+
+def _ts(obj, timestamp):
+    obj = dict(obj)
+    obj["timestamp"] = timestamp
+    return json.dumps(obj)
+
+
+def _idle_transcript(tmp_path, gap_seconds):
+    base = datetime(2026, 6, 10, 21, 0, 0, tzinfo=timezone.utc)
+    later = base + timedelta(seconds=gap_seconds)
+    z = lambda d: d.isoformat().replace("+00:00", "Z")   # exercise Z-normalization
+    p = tmp_path / "idle.jsonl"
+    p.write_text("\n".join([
+        _ts({"type": "user", "message": {"role": "user", "content": "first ask"}}, z(base)),
+        _ts({"type": "assistant", "message": {"role": "assistant", "content": "ok"}}, z(base)),
+        _ts({"type": "user", "message": {"role": "user", "content": "second ask"}}, z(later)),
+    ]) + "\n")
+    return p
+
+
+def test_returned_from_idle_true_when_gap_exceeds(tmp_path):
+    p = _idle_transcript(tmp_path, gap_seconds=20 * 60)
+    assert drift.returned_from_idle(str(p), threshold_seconds=10 * 60) is True
+
+
+def test_returned_from_idle_false_when_gap_small(tmp_path):
+    p = _idle_transcript(tmp_path, gap_seconds=60)
+    assert drift.returned_from_idle(str(p), threshold_seconds=10 * 60) is False
+
+
+def test_returned_from_idle_false_with_fewer_than_two_human_turns(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text(_ts({"type": "user", "message": {"role": "user",
+                  "content": "only ask"}}, "2026-06-10T21:00:00Z") + "\n")
+    assert drift.returned_from_idle(str(p), 600) is False
+
+
+def test_returned_from_idle_false_on_missing_file(tmp_path):
+    assert drift.returned_from_idle(str(tmp_path / "none.jsonl"), 600) is False
+
+
+def test_long_agent_turn_trips_idle_gap(tmp_path):
+    # The human-to-human gap includes the previous agent turn's runtime: a long
+    # autonomous run crosses the threshold with no human idleness. Benign by
+    # design — a gist from before a long run is exactly the kind that's stale.
+    p = tmp_path / "t.jsonl"
+    lines = [
+        _ts({"type": "user", "message": {"role": "user", "content": "go"}},
+            "2026-06-10T21:00:00Z"),
+        _ts({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "..."}]}}, "2026-06-10T21:04:00Z"),
+        _ts({"type": "user", "message": {"role": "user", "content": "next"}},
+            "2026-06-10T21:08:00Z"),
+    ]
+    p.write_text("\n".join(lines) + "\n")
+    assert drift.returned_from_idle(str(p), threshold_seconds=10 * 60) is False
+    assert drift.returned_from_idle(str(p), threshold_seconds=5 * 60) is True
+
+
+def test_read_idle_threshold_default_and_overrides(monkeypatch):
+    monkeypatch.delenv("WHEREAMI_IDLE_MIN", raising=False)
+    assert drift._read_idle_threshold() == 600
+    monkeypatch.setenv("WHEREAMI_IDLE_MIN", "5")
+    assert drift._read_idle_threshold() == 300
+    monkeypatch.setenv("WHEREAMI_IDLE_MIN", "0")
+    assert drift._read_idle_threshold() == 600    # non-positive → default
+    monkeypatch.setenv("WHEREAMI_IDLE_MIN", "-3")
+    assert drift._read_idle_threshold() == 600
+    monkeypatch.setenv("WHEREAMI_IDLE_MIN", "garbage")
+    assert drift._read_idle_threshold() == 600
 
 
 def test_persistent_parse_failure_suppresses_hook_spawns(tmp_path, monkeypatch):
