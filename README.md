@@ -135,15 +135,19 @@ statusline renderer ◀──────reads cache + transcript tail, no netwo
 
 **Cost:** orientation calls run on your Pro/Max subscription via the CLI — no
 API key, no per-call bill. Each compute is a single Haiku 4.5 call with a
-**stripped invocation**: it drops Claude Code's ~29K tokens of system context
+**stripped invocation**: it drops Claude Code's system context
 (`--tools ""`, `--exclude-dynamic-system-prompt-sections`, `--strict-mcp-config`,
 `--setting-sources ""`, a one-line classifier `--system-prompt`) and disables
-extended thinking (`MAX_THINKING_TOKENS=0`). That takes a compute from
-~29,400 input / ~4,000 output tokens / ~32 s down to **~870 input / ~64 output
-tokens, ~1 s, roughly 0.12¢** of subscription usage (measured on CLI 2.1.172,
-2026-06-10). An older CLI that doesn't accept the stripping flags is detected
-once per CLI version (cached in `~/.claude/whereami/capabilities.json`) and
-falls back to the full call automatically — no configuration, no error.
+extended thinking (`MAX_THINKING_TOKENS=0`). Measured on the real orientation
+prompt (CLI 2.1.172, 2026-06-10), that takes a compute from roughly **~30,000
+tokens of context plus ~2,300 output tokens (mostly hidden thinking), ~23 s, and
+~3.8¢** down to **~1,300 input + ~33 output tokens, ~1 s of model time (~2 s
+end-to-end), and ~$0.0015 (≈0.15¢)** — about a 20× cut in tokens, latency, and
+per-call cost. (The stripped figures were stable across repeated runs; the
+unstripped baseline and subscription latency vary call to call.) An older CLI
+that doesn't accept the stripping flags is detected once per CLI version (cached
+in `~/.claude/whereami/capabilities.json`) and falls back to the full call
+automatically — no configuration, no error.
 
 The Stop hook recomputes at most once every 6 turns, plus once each time you
 return from idle (`WHEREAMI_IDLE_MIN` minutes away, default `10`; any

@@ -25,13 +25,15 @@ cadence is affordable and a freshness trigger becomes practical.
 
 ### Changed
 
-- **Stripped Haiku invocation**: the drift call now drops Claude Code's ~29K
-  tokens of system context (`--tools ""`, `--exclude-dynamic-system-prompt-sections`,
+- **Stripped Haiku invocation**: the drift call now drops Claude Code's system
+  context (`--tools ""`, `--exclude-dynamic-system-prompt-sections`,
   `--strict-mcp-config`, `--setting-sources ""`, a one-line classifier
   `--system-prompt`) and disables extended thinking (`MAX_THINKING_TOKENS=0`).
-  Per call: **~29,400 → ~870 input tokens, ~32 s → ~1 s, ~2.6¢ → ~0.12¢**.
-  Older CLIs that reject the flags fall back to the previous full call
-  automatically, per CLI version.
+  Measured per call on the real orientation prompt (CLI 2.1.172, 2026-06-10):
+  **~30,000 → ~1,300 context tokens, ~2,300 → 33 output tokens, ~23 s → ~1 s of
+  model time (~2 s end-to-end), ~3.8¢ → ~0.15¢ ($0.0015)** — roughly a 20× cut
+  across the board. Older CLIs that reject the flags fall back to the previous
+  full call automatically, per CLI version.
 
 ### Fixed
 
