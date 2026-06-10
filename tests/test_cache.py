@@ -53,3 +53,45 @@ def test_concurrent_writers_do_not_race(tmp_path, monkeypatch):
 
     assert errors == [], "concurrent save_cache raised: {}".format(errors)
     assert cache.load_cache("sess") == {"score": 1}
+
+
+def test_load_turns_missing_or_garbage_is_zero(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    assert cache.load_turns("s1") == 0
+    (tmp_path / "s1.turns").write_text("not a number")
+    assert cache.load_turns("s1") == 0
+    (tmp_path / "s1.turns").write_text("")
+    assert cache.load_turns("s1") == 0
+
+
+def test_increment_turns_counts_up_and_roundtrips(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    assert cache.increment_turns("s1") == 1
+    assert cache.increment_turns("s1") == 2
+    assert cache.load_turns("s1") == 2
+
+
+def test_save_turns_is_atomic_replace_no_tmp_left(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    cache.save_turns("s1", 7)
+    assert cache.load_turns("s1") == 7
+    leftovers = [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+    assert leftovers == []
+
+
+def test_paths_share_sanitization(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    sid = "a/b"
+    assert cache.turns_path(sid).name == "a_b.turns"
+    assert cache.marker_path(sid).name == "a_b.computing"
+    assert cache.peek_path().name == "peek"
+
+
+def test_ts_to_epoch():
+    assert cache.ts_to_epoch(None) is None
+    assert cache.ts_to_epoch("") is None
+    assert cache.ts_to_epoch("garbage") is None
+    assert cache.ts_to_epoch(12345) is None
+    e1 = cache.ts_to_epoch("2026-06-09T10:00:00-07:00")
+    e2 = cache.ts_to_epoch("2026-06-09T10:05:00-07:00")
+    assert e1 is not None and e2 is not None and e2 - e1 == 300
