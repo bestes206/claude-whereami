@@ -114,3 +114,30 @@ def test_load_non_dict_json_returns_empty(tmp_path, monkeypatch):
     assert cache.load_cache("sess-1") == {}
     (tmp_path / "sess-1.json").write_text('"just a string"')
     assert cache.load_cache("sess-1") == {}
+
+
+def test_caps_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    cache.save_caps({"cli_version": "2.1.172", "stripped_ok": True})
+    assert cache.load_caps() == {"cli_version": "2.1.172", "stripped_ok": True}
+
+
+def test_caps_missing_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    assert cache.load_caps() == {}
+
+
+def test_caps_corrupt_or_non_dict_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    cache.caps_path().write_text("{not json")
+    assert cache.load_caps() == {}
+    cache.caps_path().write_text("[1, 2]")
+    assert cache.load_caps() == {}
+
+
+def test_caps_save_leaves_no_tmp(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    cache.save_caps({"cli_version": "x", "stripped_ok": False})
+    leftovers = [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+    assert leftovers == []
+    assert cache.caps_path().name == "capabilities.json"

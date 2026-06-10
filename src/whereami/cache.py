@@ -28,6 +28,12 @@ def peek_path() -> Path:
     return CACHE_DIR / "peek"
 
 
+def caps_path() -> Path:
+    """Global (not session-scoped) capability cache; keyed internally by
+    `claude --version` so it self-heals across CLI upgrades."""
+    return CACHE_DIR / "capabilities.json"
+
+
 def ts_to_epoch(value) -> Optional[float]:
     """Parse a cache iso-8601 timestamp to epoch seconds; None if absent/garbage."""
     if not isinstance(value, str) or not value:
@@ -94,6 +100,19 @@ def load_cache(session_id: str) -> Dict:
 
 def save_cache(session_id: str, data: Dict) -> None:
     _atomic_write(_path(session_id), json.dumps(data))
+
+
+def load_caps() -> Dict:
+    try:
+        with open(caps_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_caps(data: Dict) -> None:
+    _atomic_write(caps_path(), json.dumps(data))
 
 
 def load_turns(session_id: str) -> int:
