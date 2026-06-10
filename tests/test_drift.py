@@ -374,6 +374,59 @@ def test_hook_survives_non_dict_cache_json(tmp_path, monkeypatch):
     assert len(spawned) == 1             # treated as no-cache → due
 
 
+def test_invoke_returns_full_envelope_and_passes_args(monkeypatch):
+    captured = {}
+
+    class FakeProc:
+        stdout = '{"result": "hi", "usage": {"output_tokens": 7}}'
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        captured["env"] = kwargs.get("env")
+        return FakeProc()
+
+    monkeypatch.setattr(drift.subprocess, "run", fake_run)
+    env = drift._invoke(["claude", "-p", "x"], {"MAX_THINKING_TOKENS": "0"})
+    assert env == {"result": "hi", "usage": {"output_tokens": 7}}
+    assert captured["args"] == ["claude", "-p", "x"]
+    assert captured["env"]["MAX_THINKING_TOKENS"] == "0"
+    assert "PATH" in captured["env"]   # merged OVER os.environ, not replaced
+
+
+def test_invoke_none_env_inherits_parent(monkeypatch):
+    captured = {}
+
+    class FakeProc:
+        stdout = '{"result": "ok"}'
+
+    def fake_run(args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return FakeProc()
+
+    monkeypatch.setattr(drift.subprocess, "run", fake_run)
+    drift._invoke(["claude"], None)
+    assert captured["env"] is None   # today's behavior: inherit verbatim
+
+
+def test_invoke_degrades_to_empty_dict(monkeypatch):
+    class FakeProc:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    for stdout in ("[1, 2]", "null", "not json", ""):
+        monkeypatch.setattr(drift.subprocess, "run",
+                            lambda *a, stdout=stdout, **k: FakeProc(stdout))
+        assert drift._invoke(["claude"], None) == {}
+
+
+def test_invoke_subprocess_error_is_empty(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("no claude")
+
+    monkeypatch.setattr(drift.subprocess, "run", boom)
+    assert drift._invoke(["claude"], None) == {}
+
+
 def test_persistent_parse_failure_suppresses_hook_spawns(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     p = _transcript(tmp_path)

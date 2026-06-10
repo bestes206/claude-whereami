@@ -21,6 +21,24 @@ FAILURE_BACKOFF = 600    # seconds between retries after a parse failure
 SWEEP_AGE = 86400        # 1 day: opportunistic cleanup threshold
 
 
+def _invoke(args, env=None) -> Dict:
+    """Low-level `claude` CLI call. Returns the FULL parsed JSON envelope
+    (`result`, `usage`, …) or {} on any failure. `env`, when given, is merged
+    OVER the current environment (so MAX_THINKING_TOKENS=0 rides alongside the
+    inherited login/PATH); env=None inherits the parent verbatim — today's
+    behavior. Returning the whole envelope lets the probe read
+    usage.output_tokens for the thinking-off check."""
+    try:
+        proc = subprocess.run(
+            args, capture_output=True, text=True, timeout=CLI_TIMEOUT,
+            env=(dict(os.environ, **env) if env else None),
+        )
+        envelope = json.loads(proc.stdout)
+        return envelope if isinstance(envelope, dict) else {}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+
+
 def _run_claude(prompt: str) -> str:
     """Call Haiku via the logged-in `claude` CLI (uses the user's subscription,
     no API key). Returns the model's text, or '' on any failure."""
