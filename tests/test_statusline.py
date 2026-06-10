@@ -12,6 +12,11 @@ def test_fmt_duration():
     assert statusline.fmt_duration(3_720_000) == "1h2m"
 
 
+def test_fmt_duration_negative_clamped_to_zero():
+    # A clock-skewed payload must not render "⏱ -5s"; fmt_ago already clamps.
+    assert statusline.fmt_duration(-5_000) == "0s"
+
+
 def test_truncate():
     assert statusline.truncate("short", 60) == "short"
     assert statusline.truncate("x" * 80, 60) == "x" * 59 + "…"

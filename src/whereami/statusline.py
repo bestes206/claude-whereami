@@ -36,7 +36,7 @@ def truncate(text: str, limit: int) -> str:
 
 
 def fmt_duration(ms: int) -> str:
-    secs = int(ms // 1000)
+    secs = max(0, int(ms // 1000))  # clamp clock skew, as fmt_ago does
     if secs < 60:
         return "{}s".format(secs)
     mins = secs // 60
