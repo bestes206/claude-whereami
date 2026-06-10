@@ -1,7 +1,8 @@
 {
   "statusLine": {
     "type": "command",
-    "command": "/Users/bryan/Playground/session-support-app/.venv/bin/whereami-statusline"
+    "command": "/path/to/whereami-venv/bin/whereami-statusline",
+    "refreshInterval": 3
   },
   "hooks": {
     "Stop": [
@@ -9,7 +10,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/bryan/Playground/session-support-app/.venv/bin/whereami-hook"
+            "command": "/path/to/whereami-venv/bin/whereami-hook"
           }
         ]
       }
