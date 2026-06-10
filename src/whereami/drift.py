@@ -59,6 +59,12 @@ def compute(session_id: str, transcript_path: str,
     tail = (transcript.last_assistant_text(transcript_path) or "")[-ASSISTANT_TAIL_CHARS:]
     want_goal = not data.get("goal")
     result = orient(opening, recent, tail, data.get("gist"), want_goal, runner=runner)
+    # The goal is hand-editable and `data` predates the ≤60s LLM call: re-read
+    # it so a mid-compute hand-edit sticks (the spec's keep-first escape
+    # hatch) on both the success and the parse-failure save below.
+    edited_goal = cache.load_cache(session_id).get("goal")
+    if isinstance(edited_goal, str) and edited_goal:
+        data["goal"] = edited_goal
     if result is None:
         # Parse failure: record ONLY the failure timestamp — the last good
         # data must persist and honestly age (never a green blank).
@@ -68,7 +74,7 @@ def compute(session_id: str, transcript_path: str,
     data["score"] = result["score"]
     data["gist"] = result["gist"]
     data["open_loop"] = result["open_loop"]
-    if want_goal and "goal" in result:
+    if want_goal and "goal" in result and not data.get("goal"):
         data["goal"] = result["goal"]   # keep-first: never overwritten later
     data["opening_goal"] = opening
     data["ts"] = _now_iso()

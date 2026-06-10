@@ -163,6 +163,35 @@ def test_compute_goal_keep_first_and_prompt_drops_goal(tmp_path, monkeypatch):
     assert '"goal"' not in prompts[1]            # re-asking is pure token waste
 
 
+def test_hand_edited_goal_during_slow_compute_sticks(tmp_path, monkeypatch):
+    # The spec's escape hatch: "hand-edit the goal field — it is never
+    # overwritten, so the edit sticks." The compute's dict predates a ≤60s
+    # LLM call, so it must re-read the goal before saving — on the success
+    # path AND the parse-failure path.
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    p = _transcript(tmp_path)
+
+    def editing_runner(edit, reply):
+        def runner(prompt):
+            data = cache.load_cache("s1")
+            data["goal"] = edit
+            cache.save_cache("s1", data)
+            return reply
+        return runner
+
+    cache.save_cache("s1", {"goal": "model goal", "score": 1, "gist": "old",
+                            "opening_goal": "build a parser",
+                            "ts": "2026-06-09T10:00:00-07:00",
+                            "turns_at_last_compute": 0})
+    drift.compute("s1", str(p), runner=editing_runner(
+        "FIRST EDIT", '{"score": 5, "gist": "deploy fixes", "open_loop": ""}'))
+    assert cache.load_cache("s1")["goal"] == "FIRST EDIT"
+
+    drift.compute("s1", str(p), runner=editing_runner(
+        "SECOND EDIT", "not json at all"))
+    assert cache.load_cache("s1")["goal"] == "SECOND EDIT"
+
+
 def test_compute_continuity_feeds_previous_gist(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     p = _transcript(tmp_path)
