@@ -175,6 +175,21 @@ def peek_active(now: float) -> bool:
     return 0 <= age < PEEK_SECONDS   # lower clamp: a future-dated mtime is inert
 
 
+# Past this, a lingering compute marker is a crashed compute, not work in
+# flight (mirrors drift.CLI_TIMEOUT) — so "scoring…" can't get stuck on.
+MARKER_INFLIGHT_TTL = 60
+
+
+def compute_in_flight(session_id: str, now: float) -> bool:
+    """True while a fresh compute marker exists — a recompute is running and a
+    new score is on its way. Drives the peek "scoring…" indicator."""
+    try:
+        age = now - os.stat(str(cache.marker_path(session_id))).st_mtime
+    except OSError:
+        return False
+    return 0 <= age < MARKER_INFLIGHT_TTL   # lower clamp as in peek_active
+
+
 def fmt_ago(secs: float) -> str:
     secs = max(0, int(secs))
     if secs < 60:
@@ -256,7 +271,7 @@ def open_loop_line(cached: dict, turns: int) -> Optional[str]:
 
 
 def render_peek(data: dict, cached: dict, last: Optional[str],
-                turns: int, now: float) -> str:
+                turns: int, now: float, session_id: str = "") -> str:
     score = _score_value(cached)
     gist = _clean(cached.get("gist"))
     scored = score is not None and bool(gist)
@@ -278,6 +293,8 @@ def render_peek(data: dict, cached: dict, last: Optional[str],
     if loop:
         lines.append(loop)
     tail = _gauges(data) + [staleness_segment(cached, now)]
+    if compute_in_flight(session_id, now):
+        tail.append("scoring…")   # a fresh score is on its way — you're not stuck
     failure = failure_segment(cached, now)
     if failure:
         tail.append(failure)
@@ -311,7 +328,7 @@ def render(data: dict, now: Optional[float] = None) -> str:
         turns = cache.load_turns(session_id)
         if session_id and transcript_path:
             _maybe_recompute(session_id, transcript_path, cached, turns)
-        return render_peek(data, cached, last, turns, now)
+        return render_peek(data, cached, last, turns, now, session_id)
     return render_normal(data, cached, last)
 
 

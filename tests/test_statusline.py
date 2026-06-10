@@ -295,6 +295,41 @@ def test_peek_show_drift_score_env_appends_number(tmp_path, monkeypatch):
     assert out.split("\n")[0] == RED + "off track (70) · totally different work" + RESET
 
 
+def test_compute_in_flight_marker_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    assert statusline.compute_in_flight("s1", now) is False        # no marker
+    marker = cache.marker_path("s1"); marker.touch()
+    os.utime(str(marker), (now, now))
+    assert statusline.compute_in_flight("s1", now) is True         # fresh → scoring
+    os.utime(str(marker), (now - 61, now - 61))
+    assert statusline.compute_in_flight("s1", now) is False        # crashed/stale marker
+    os.utime(str(marker), (now + 5, now + 5))
+    assert statusline.compute_in_flight("s1", now) is False        # future-dated → inert
+
+
+def test_peek_shows_scoring_while_compute_in_flight(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 30, "gist": "parser work",
+                            "ts": _iso(now - 1200), "turns_at_last_compute": 0})
+    marker = cache.marker_path("s1"); marker.touch(); os.utime(str(marker), (now, now))
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    # the in-flight indicator sits in the tail right after staleness
+    assert "scored 20m ago · scoring…" in out
+
+
+def test_peek_no_scoring_indicator_without_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 30, "gist": "parser work",
+                            "ts": _iso(now - 1200), "turns_at_last_compute": 0})
+    out = statusline.render({"session_id": "s1", "transcript_path": ""}, now=now)
+    assert "scoring…" not in out
+
+
 def test_peek_open_loop_dim_when_stale_omitted_when_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     now = 10_000.0

@@ -60,7 +60,7 @@ def test_console_install_uses_sibling_bin_scripts():
 # --- settings.json patching (the risky part) ----------------------------
 
 def _block(cmd):
-    return {"type": "command", "command": cmd, "refreshInterval": 3}
+    return {"type": "command", "command": cmd, "refreshInterval": 1}
 
 
 def test_statusline_set_on_empty_settings():
@@ -295,7 +295,7 @@ def test_main_wires_statusline_and_creates_peek_dir(tmp_path, monkeypatch):
     assert rc == 0
     settings = json.loads((home / ".claude" / "settings.json").read_text())
     assert settings["statusLine"]["command"] == 'python3 "/clone/scripts/statusline.py"'
-    assert settings["statusLine"]["refreshInterval"] == 3
+    assert settings["statusLine"]["refreshInterval"] == 1
     # clone install (non-plugin) also wires the Stop hook
     cmds = [h["command"] for g in settings["hooks"]["Stop"] for h in g["hooks"]]
     assert 'python3 "/clone/scripts/hook.py"' in cmds

@@ -27,6 +27,11 @@ STATUSLINE_GLOB = (
 
 HS_MARKER = "-- whereami peek hotkey"
 
+# Statusline poll interval (seconds). 1, not the prior 3, so the peek panel
+# appears promptly on the hotkey and a fresh score shows up sooner — the
+# render is a cheap read-only path, so polling 1×/s is comfortably affordable.
+STATUSLINE_REFRESH = 1
+
 # Both wired statusline forms reference whereami; a foreign statusline won't.
 _OURS_MARKERS = ("whereami", "statusline.py")
 
@@ -74,7 +79,7 @@ def resolve_commands(scripts_dir=None, argv0=None,
 # --- settings.json patching (pure) --------------------------------------
 
 def _statusline_block(cmd: str) -> dict:
-    return {"type": "command", "command": cmd, "refreshInterval": 3}
+    return {"type": "command", "command": cmd, "refreshInterval": STATUSLINE_REFRESH}
 
 
 def _is_ours(cmd: str) -> bool:
