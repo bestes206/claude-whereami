@@ -155,22 +155,15 @@ def _probe(version: str) -> bool:
 
 
 def _run_claude(prompt: str) -> str:
-    """Call Haiku via the logged-in `claude` CLI (uses the user's subscription,
-    no API key). Returns the model's text, or '' on any failure."""
-    try:
-        proc = subprocess.run(
-            ["claude", "-p", prompt,
-             "--model", HAIKU_MODEL,
-             "--output-format", "json"],
-            capture_output=True, text=True, timeout=CLI_TIMEOUT,
-        )
-        envelope = json.loads(proc.stdout)
-        if not isinstance(envelope, dict):
-            return ""   # shape-changed envelope (risk E): degrade, never raise
-        result = envelope.get("result", "")
-        return result if isinstance(result, str) else ""
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return ""
+    """Call Haiku via the logged-in `claude` CLI (subscription, no API key).
+    Stripped argv + thinking-off when the CLI supports it (~870 in / ~64 out /
+    ~1s); otherwise today's unstripped call, verbatim. Returns the model's
+    text, or '' on any failure."""
+    stripped = _stripped_supported()
+    envelope = _invoke(_build_argv(prompt, stripped),
+                       THINKING_OFF_ENV if stripped else None)
+    result = envelope.get("result", "")
+    return result if isinstance(result, str) else ""
 
 
 def _now_iso() -> str:

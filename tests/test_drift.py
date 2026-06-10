@@ -582,6 +582,43 @@ def test_stripped_supported_reprobes_on_version_change(tmp_path, monkeypatch):
     assert cache.load_caps().get("cli_version") == "NEW"
 
 
+def test_run_claude_uses_stripped_when_supported(monkeypatch):
+    monkeypatch.setattr(drift, "_stripped_supported", lambda: True)
+    captured = {}
+
+    def fake_invoke(args, env=None):
+        captured["args"] = args
+        captured["env"] = env
+        return {"result": '{"score": 1, "gist": "x"}'}
+
+    monkeypatch.setattr(drift, "_invoke", fake_invoke)
+    assert drift._run_claude("PROMPT") == '{"score": 1, "gist": "x"}'
+    assert "--tools" in captured["args"]
+    assert captured["env"] == {"MAX_THINKING_TOKENS": "0"}
+
+
+def test_run_claude_uses_unstripped_when_unsupported(monkeypatch):
+    monkeypatch.setattr(drift, "_stripped_supported", lambda: False)
+    captured = {}
+
+    def fake_invoke(args, env=None):
+        captured["args"] = args
+        captured["env"] = env
+        return {"result": "reply"}
+
+    monkeypatch.setattr(drift, "_invoke", fake_invoke)
+    assert drift._run_claude("PROMPT") == "reply"
+    assert captured["args"] == ["claude", "-p", "PROMPT", "--model",
+                                drift.HAIKU_MODEL, "--output-format", "json"]
+    assert captured["env"] is None   # today's behavior verbatim: no env override
+
+
+def test_run_claude_non_str_result_is_empty(monkeypatch):
+    monkeypatch.setattr(drift, "_stripped_supported", lambda: True)
+    monkeypatch.setattr(drift, "_invoke", lambda *a, **k: {"result": {"x": 1}})
+    assert drift._run_claude("PROMPT") == ""
+
+
 def test_persistent_parse_failure_suppresses_hook_spawns(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     p = _transcript(tmp_path)
