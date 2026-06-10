@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The token diet. Each orientation compute is ~20× cheaper, so the periodic
+cadence is affordable and a freshness trigger becomes practical.
+
+### Added
+
+- **Return-from-idle recompute**: a recompute now also fires when you come back
+  after being away — when the gap between your last two messages crosses
+  `WHEREAMI_IDLE_MIN` minutes (default `10`) — so the gist is fresh the instant
+  you return, on top of the existing 6-turn cadence.
+- **Capability probe**: a once-per-CLI-version probe (cached in
+  `~/.claude/whereami/capabilities.json`) decides whether the installed `claude`
+  accepts the token-stripping flags, and confirms extended thinking is actually
+  off by checking the probe's output-token count. `whereami install` warms it so
+  the first compute isn't delayed.
+
+### Changed
+
+- **Stripped Haiku invocation**: the drift call now drops Claude Code's ~29K
+  tokens of system context (`--tools ""`, `--exclude-dynamic-system-prompt-sections`,
+  `--strict-mcp-config`, `--setting-sources ""`, a one-line classifier
+  `--system-prompt`) and disables extended thinking (`MAX_THINKING_TOKENS=0`).
+  Per call: **~29,400 → ~870 input tokens, ~32 s → ~1 s, ~2.6¢ → ~0.12¢**.
+  Older CLIs that reject the flags fall back to the previous full call
+  automatically, per CLI version.
+
+### Fixed
+
+- Transcript timestamps end in `Z` (UTC); `datetime.fromisoformat` rejects bare
+  `Z` before Python 3.11. `parse_iso` now normalizes `Z` → `+00:00` so the idle
+  trigger works on the 3.9/3.10 floor instead of silently never firing.
+
 ## [0.2.0] - 2026-06-10
 
 The orientation panel. The single throttled Haiku call stops being a
