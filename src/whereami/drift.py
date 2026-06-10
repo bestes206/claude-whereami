@@ -83,7 +83,10 @@ def hook_due(data: Dict, turns: int) -> bool:
         return True
     if not data.get("gist"):
         return True   # v1→v2 transition self-heal (turn-delta may be negative)
-    return turns - cache.turns_at_last_compute(data) >= THROTTLE_TURNS
+    delta = turns - cache.turns_at_last_compute(data)
+    # Negative delta = a reset/lost .turns file behind a surviving cache:
+    # inconsistent state is due, not "fresh for the next 45 turns".
+    return delta >= THROTTLE_TURNS or delta < 0
 
 
 def run_hook() -> None:

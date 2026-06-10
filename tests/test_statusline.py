@@ -455,6 +455,25 @@ def test_peek_recompute_gist_arm_survives_corrupt_talc(tmp_path, monkeypatch):
     assert calls == ["s1"]
 
 
+def test_peek_recompute_when_turn_count_behind_cache(tmp_path, monkeypatch):
+    # Lost/reset .turns with a surviving .json: the inconsistent state must
+    # trigger a recompute, and the stale open loop must render dim — not
+    # read as maximally fresh because 1 > 40 is False.
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    calls = []
+    _patch_spawn(monkeypatch, calls)
+    now = 10_000.0
+    _touch_peek(tmp_path, now)
+    cache.save_cache("s1", {"score": 10, "gist": "parser work",
+                            "open_loop": "pick a name",
+                            "ts": _iso(now - 3 * 86_400),
+                            "turns_at_last_compute": 40})
+    cache.save_turns("s1", 1)
+    out = statusline.render({"session_id": "s1", "transcript_path": "/t"}, now=now)
+    assert calls == ["s1"]
+    assert DIM + "⊙ your turn: pick a name" + RESET in out
+
+
 def test_peek_no_recompute_when_fresh(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     calls = []

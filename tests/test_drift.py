@@ -302,6 +302,15 @@ def test_hook_due_tolerates_corrupt_talc():
     assert drift.hook_due(data, 3) is False  # still throttles from 0
 
 
+def test_hook_due_when_turn_count_behind_cache():
+    # A reset/lost .turns file (json survives, talc=40, count restarts at 1)
+    # is inconsistent state: days-old data would otherwise render as fresh
+    # for ~45 turns. A negative delta is due, not fresh.
+    data = {"ts": "2026-06-09T10:00:00-07:00", "gist": "parser work",
+            "turns_at_last_compute": 40}
+    assert drift.hook_due(data, 1) is True
+
+
 def test_hook_due_via_gist_arm_on_v1_cache(tmp_path, monkeypatch):
     # Resumed v1 session: ts present, gist absent, turn-delta hugely negative.
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
