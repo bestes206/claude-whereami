@@ -264,7 +264,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv=None, *, scripts_dir=None) -> int:
+def _warm_capabilities(out) -> None:
+    """Prime the version-keyed capability cache so the first real compute isn't
+    delayed by the probe. Best-effort: never fail the install over it. The lazy
+    cache stays the source of truth and self-heals across CLI upgrades."""
+    try:
+        from whereami import drift
+        ok = drift._stripped_supported()
+        print("  capability probe: {}".format("stripped" if ok else "unstripped"),
+              file=out)
+    except Exception:
+        print("  capability probe: skipped", file=out)
+
+
+def main(argv=None, *, scripts_dir=None, warm=_warm_capabilities) -> int:
     args = build_arg_parser().parse_args(argv)
     home = Path(os.path.expanduser("~"))
     out = sys.stdout
@@ -300,6 +313,7 @@ def main(argv=None, *, scripts_dir=None) -> int:
     Path(_peek_path(home)).parent.mkdir(parents=True, exist_ok=True)
 
     _apply_hotkey(choice, home, out, no_input=args.no_input, yes=args.yes)
+    warm(out)
     print("Done. Restart Claude Code (or wait for the next statusline tick).",
           file=out)
     return 0
