@@ -1,6 +1,6 @@
 import json
 import re
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 _REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 _COMMAND_RE = re.compile(r"<command-[a-z]+>.*?</command-[a-z]+>", re.DOTALL)
@@ -74,15 +74,19 @@ def _head_lines(path: str, max_lines: int = 200) -> List[str]:
     return out
 
 
-def last_human_text(path: str) -> Optional[str]:
+def _last_text(path: str, extract: Callable[[dict], Optional[str]]) -> Optional[str]:
     for line in reversed(_tail_lines(path)):
         entry = _parse(line)
         if entry is None:
             continue
-        text = human_text(entry)
+        text = extract(entry)
         if text:
             return text
     return None
+
+
+def last_human_text(path: str) -> Optional[str]:
+    return _last_text(path, human_text)
 
 
 def assistant_text(entry: dict) -> Optional[str]:
@@ -98,14 +102,7 @@ def assistant_text(entry: dict) -> Optional[str]:
 
 
 def last_assistant_text(path: str) -> Optional[str]:
-    for line in reversed(_tail_lines(path)):
-        entry = _parse(line)
-        if entry is None:
-            continue
-        text = assistant_text(entry)
-        if text:
-            return text
-    return None
+    return _last_text(path, assistant_text)
 
 
 def opening_turns(path: str, n: int = 2) -> List[str]:
