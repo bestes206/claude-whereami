@@ -10,6 +10,15 @@
 
 **Source of truth:** `docs/superpowers/specs/2026-06-10-whereami-token-diet-design.md`.
 
+> **Annotation — measured at implementation (2026-06-10, CLI 2.1.172).** The
+> per-call figures reproduced throughout this plan (`~870` input / `~64` output /
+> `~0.12¢` / `~1 s`, and "~30×") are the spec's design-time estimate. Measured on
+> the real orientation prompt, the stripped call is **~1,300 input / 33 output
+> tokens, ~1 s model time (~2 s end-to-end), ~$0.0015 (≈0.15¢)** vs **~30,000
+> context / ~2,300 output / ~23 s / ~3.8¢** unstripped — a ~20–25× cut. The
+> source comments and README/CHANGELOG carry the measured numbers; see the
+> annotated table in the spec.
+
 ---
 
 ## File Structure

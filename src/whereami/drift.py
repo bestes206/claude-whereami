@@ -34,9 +34,9 @@ MARKER_TTL = 150         # seconds; invariant: >= 2 * (CLI_TIMEOUT + SPAWN_SLOP)
 FAILURE_BACKOFF = 600    # seconds between retries after a parse failure
 SWEEP_AGE = 86400        # 1 day: opportunistic cleanup threshold
 
-# The stripped invocation (validated on CLI 2.1.172): drops ~29K of Claude
-# Code context to ~870 input tokens. Empty-string args are load-bearing and
-# version-brittle — see _stripped_supported's probe + fallback.
+# The stripped invocation (measured on CLI 2.1.172, 2026-06-10): drops ~30K of
+# Claude Code context to ~1,300 input tokens. Empty-string args are load-bearing
+# and version-brittle — see _stripped_supported's probe + fallback.
 STRIP_FLAGS = [
     "--system-prompt",
     "You are a JSON-only classifier. Reply with only the requested JSON "
@@ -46,7 +46,8 @@ STRIP_FLAGS = [
     "--setting-sources", "",
     "--tools", "",
 ]
-# MAX_THINKING_TOKENS=0 kills extended thinking (64 output tokens, ~1s).
+# MAX_THINKING_TOKENS=0 kills extended thinking (measured ~33 output tokens,
+# ~1s of model time, vs ~2,300 output / ~23s with thinking on).
 # DISABLE_INTERLEAVED_THINKING=1 does NOT — it only disables interleaving.
 THINKING_OFF_ENV = {"MAX_THINKING_TOKENS": "0"}
 
@@ -170,9 +171,9 @@ def _probe(version: str) -> bool:
 
 def _run_claude(prompt: str) -> str:
     """Call Haiku via the logged-in `claude` CLI (subscription, no API key).
-    Stripped argv + thinking-off when the CLI supports it (~870 in / ~64 out /
-    ~1s); otherwise today's unstripped call, verbatim. Returns the model's
-    text, or '' on any failure."""
+    Stripped argv + thinking-off when the CLI supports it (measured ~1,300 in /
+    ~33 out, ~1s model time / ~2s end-to-end); otherwise today's unstripped
+    call, verbatim. Returns the model's text, or '' on any failure."""
     stripped = _stripped_supported()
     envelope = _invoke(_build_argv(prompt, stripped),
                        THINKING_OFF_ENV if stripped else None)

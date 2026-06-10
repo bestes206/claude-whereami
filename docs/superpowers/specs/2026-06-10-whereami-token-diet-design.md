@@ -35,6 +35,26 @@ gracefully on older CLIs that lack the stripping flags.
 | Latency | ~32 s | ~1 s |
 | Cost / call | ~2.6¢+ | ~0.12¢ |
 
+> **Annotation — measured at implementation (2026-06-10, CLI 2.1.172).** The
+> table above is the design-time estimate. Re-measured on the real orientation
+> prompt by reading the `claude -p --output-format json` envelope (`usage`,
+> `total_cost_usd`, `duration_ms`), the actuals were:
+>
+> | | Unstripped (before) | Stripped (after) |
+> |---|---|---|
+> | Context (input) tokens | ~30,260 (17,681 cache-read + 12,579 cache-create) | 1,321 |
+> | Output tokens | 2,257 (mostly hidden thinking) | 33 |
+> | Latency | ~23 s API / ~25 s wall | ~1 s API / ~2 s wall |
+> | Cost / call (`total_cost_usd`) | $0.0382 (~3.8¢) | $0.0015 (~0.15¢) |
+>
+> Net ≈ 20–25× across tokens, latency, and cost (close to the ~30× goal). The
+> stripped figures were stable across 5 repeats; the unstripped baseline is a
+> single sample and subscription latency varies. The design estimates of ~870
+> input / ~64 output / ~0.12¢ / ~1 s were optimistic: the stripped call still
+> carries ~1,300 input tokens (full price, no cache), and ~1 s is the model time
+> while the detached compute takes ~2 s end-to-end (subprocess + CLI startup).
+> The README/CHANGELOG carry these measured numbers.
+
 Validated on the real orientation prompt: score / gist / open_loop / goal all
 correct with thinking off and the system context stripped (the orientation
 prompt is fully self-contained — the Claude Code system prompt never did any
