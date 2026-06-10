@@ -26,8 +26,9 @@ the user? What is the next concrete action?
 
 ## 4. Drift
 State whether the conversation has stayed on its original path or wandered, and
-how far. If a drift score cache exists at `~/.claude/whereami/<session-id>.json`,
-you may read it for the score/label, but do not write to it.
+how far. If an orientation cache exists at `~/.claude/whereami/<session-id>.json`,
+you may read its `score`, `gist`, `open_loop`, and `goal` fields, but do not
+write to it.
 
 ## 5. Split recommendation
 A clear call: keep going in this session, or start a fresh one — with a
