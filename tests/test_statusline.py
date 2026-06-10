@@ -124,6 +124,27 @@ def test_gist_segment_non_finite_score_is_placeholder():
     assert statusline.gist_segment({"score": float("inf"), "gist": "x"}) == DIM + "…" + RESET
 
 
+def test_ansi_and_control_chars_stripped_from_model_fields():
+    # JSON \u escapes can smuggle ESC/BEL into model-authored fields (a
+    # prompt-injected gist setting the window title, say); whole CSI/OSC
+    # sequences vanish, bare control bytes vanish, words survive.
+    assert statusline.gist_segment(
+        {"score": 5, "gist": "fix\x1b]0;pwned\x07 bug"}) == GREEN + "fix bug" + RESET
+    assert statusline.gist_segment(
+        {"score": 5, "gist": "a\x1b[31mb\x1b[0mc"}) == GREEN + "abc" + RESET
+
+
+def test_ansi_stripped_from_pasted_last_message(tmp_path, monkeypatch):
+    # A pasted shell log re-emitted raw ANSI into the terminal every tick.
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    p = tmp_path / "t.jsonl"
+    p.write_text(json.dumps({"type": "user", "message": {
+        "role": "user",
+        "content": "\x1b[31mFAIL\x1b[0m tests \x07 then go"}}) + "\n")
+    out = statusline.render({"session_id": "s1", "transcript_path": str(p)})
+    assert out.split("\n")[1] == "❯ FAIL tests then go"
+
+
 def test_gist_segment_bool_score_is_placeholder():
     # bool subclasses int: a true/false score is cache garbage, not a green 1.
     assert statusline.gist_segment({"score": True, "gist": "x"}) == DIM + "…" + RESET

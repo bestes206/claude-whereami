@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import re
 import sys
 import time
 from typing import List, Optional
@@ -79,8 +80,19 @@ def _color_for(score: int) -> str:
     return _RED
 
 
+# Terminal-active bytes in rendered text: whole CSI/OSC sequences (pasted
+# shell logs, prompt-injected model fields via JSON \u escapes), then any
+# bare control byte. Whitespace-class bytes (\t\n\v\f\r, \x1c-\x1f, \x85)
+# are deliberately NOT in the class — _collapse turns those into spaces.
+_CTRL_RE = re.compile(
+    "\x1b\\[[0-?]*[ -/]*[@-~]"                  # CSI: colors, cursor movement
+    "|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)?"    # OSC: window title, hyperlinks
+    "|[\x00-\x08\x0e-\x1b\x7f-\x84\x86-\x9f]"   # other controls incl. bare ESC
+)
+
+
 def _collapse(text: str) -> str:
-    return " ".join(text.split())
+    return " ".join(_CTRL_RE.sub("", text).split())
 
 
 def _clean(value) -> str:
