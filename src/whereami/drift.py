@@ -73,6 +73,46 @@ def _build_argv(prompt: str, stripped: bool):
     return argv
 
 
+PROBE_MAX_OUTPUT_TOKENS = 300
+
+
+def _probe_json_ok(result) -> bool:
+    """The probe's OWN parse check — deliberately NOT parse_orientation (which
+    requires score+gist and would reject a probe reply, mis-classifying every
+    CLI as unsupported). Just: is there a JSON OBJECT in the reply? Greedy regex
+    tolerates ```json fences and surrounding prose."""
+    if not isinstance(result, str):
+        return False
+    match = re.search(r"\{.*\}", result, re.DOTALL)
+    if not match:
+        return False
+    try:
+        return isinstance(json.loads(match.group(0)), dict)
+    except ValueError:
+        return False
+
+
+def _output_tokens(envelope: Dict) -> Optional[int]:
+    usage = envelope.get("usage")
+    if isinstance(usage, dict):
+        tokens = usage.get("output_tokens")
+        if isinstance(tokens, int) and not isinstance(tokens, bool):
+            return tokens
+    return None
+
+
+def _stripped_probe_ok(envelope: Dict) -> bool:
+    """Stripped probe passes iff the reply is parseable JSON AND output_tokens
+    is low. Low output is the thinking-off proof: a reasoning prompt with
+    thinking ON spikes output; if a future CLI ignores MAX_THINKING_TOKENS=0
+    the count spikes and the probe catches the regression instead of silently
+    paying the thinking tax. Missing usage → can't confirm → not ok."""
+    if not _probe_json_ok(envelope.get("result")):
+        return False
+    tokens = _output_tokens(envelope)
+    return tokens is not None and tokens < PROBE_MAX_OUTPUT_TOKENS
+
+
 def _run_claude(prompt: str) -> str:
     """Call Haiku via the logged-in `claude` CLI (uses the user's subscription,
     no API key). Returns the model's text, or '' on any failure."""

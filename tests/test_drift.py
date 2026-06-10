@@ -462,6 +462,38 @@ def test_build_argv_stripped_adds_all_six_flags():
     assert "JSON-only classifier" in sp
 
 
+def test_probe_json_ok_accepts_object_and_fences():
+    assert drift._probe_json_ok('{"answer": 59}') is True
+    assert drift._probe_json_ok('```json\n{"answer": 59}\n```') is True
+    assert drift._probe_json_ok('here: {"answer": 59} done') is True
+
+
+def test_probe_json_ok_rejects_non_object():
+    assert drift._probe_json_ok("sorry, no JSON") is False
+    assert drift._probe_json_ok(None) is False
+    assert drift._probe_json_ok("[1, 2]") is False   # array is not an object
+
+
+def test_output_tokens_reads_usage():
+    assert drift._output_tokens({"usage": {"output_tokens": 42}}) == 42
+    assert drift._output_tokens({}) is None
+    assert drift._output_tokens({"usage": {}}) is None
+    assert drift._output_tokens({"usage": {"output_tokens": True}}) is None  # bool
+
+
+def test_stripped_probe_ok_requires_json_AND_low_tokens():
+    ok = {"result": '{"answer": 59}', "usage": {"output_tokens": 20}}
+    assert drift._stripped_probe_ok(ok) is True
+    # thinking still on → output spikes → reject even though JSON parses
+    hot = {"result": '{"answer": 59}', "usage": {"output_tokens": 2025}}
+    assert drift._stripped_probe_ok(hot) is False
+    # no usage → can't confirm thinking-off → reject
+    assert drift._stripped_probe_ok({"result": '{"answer": 59}'}) is False
+    # not parseable → reject
+    assert drift._stripped_probe_ok(
+        {"result": "thinking out loud", "usage": {"output_tokens": 5}}) is False
+
+
 def test_persistent_parse_failure_suppresses_hook_spawns(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     p = _transcript(tmp_path)
