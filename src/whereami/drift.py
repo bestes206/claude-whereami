@@ -1,23 +1,24 @@
 import json
+import os
 import re
 import subprocess
+import sys
+import time
+from datetime import datetime
 from typing import Callable, Dict, Optional, Tuple
+
+from . import cache, transcript
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 CLI_TIMEOUT = 60  # seconds: claude -p subprocess timeout
 
-_PROMPT = """You compare a coding session's ORIGINAL GOAL to its RECENT activity \
-and rate how far the conversation has drifted from the original goal.
+THROTTLE_TURNS = 6
+ASSISTANT_TAIL_CHARS = 700
 
-ORIGINAL GOAL:
-{goal}
-
-RECENT ACTIVITY:
-{recent}
-
-Reply with ONLY a JSON object, no prose:
-{{"score": <integer 0-100, 0=fully on topic, 100=completely different topic>, \
-"label": "<3-6 word description of the current focus>"}}"""
+SPAWN_SLOP = 15          # seconds: spawn + interpreter-startup allowance
+MARKER_TTL = 150         # seconds; invariant: >= 2 * (CLI_TIMEOUT + SPAWN_SLOP)
+FAILURE_BACKOFF = 600    # seconds between retries after a parse failure
+SWEEP_AGE = 86400        # 1 day: opportunistic cleanup threshold
 
 
 def _run_claude(prompt: str) -> str:
@@ -36,67 +37,50 @@ def _run_claude(prompt: str) -> str:
         return ""
 
 
-def score_drift(goal: str, recent: str,
-                runner: Optional[Callable[[str], str]] = None) -> Tuple[int, str]:
-    run = runner or _run_claude
-    text = run(_PROMPT.format(goal=goal, recent=recent))
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        return 0, ""
-    try:
-        data = json.loads(match.group(0))
-    except ValueError:
-        return 0, ""
-    try:
-        score = int(data.get("score", 0))
-    except (TypeError, ValueError):
-        score = 0
-    score = max(0, min(100, score))
-    label = str(data.get("label", "")).strip()
-    return score, label
-
-
-# src/whereami/drift.py  (append)
-from datetime import datetime
-
-from . import cache, transcript
-
-
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def compute(session_id: str, transcript_path: str) -> None:
+def compute(session_id: str, transcript_path: str,
+            runner: Optional[Callable[[str], str]] = None) -> None:
+    # Read .turns ONCE, before the transcript: turns landing during the LLM
+    # call must stay > turns_at_last_compute, so the renderer's staleness
+    # trigger self-corrects instead of self-suppressing.
+    turns_now = cache.load_turns(session_id)
     data = cache.load_cache(session_id)
-    goal = data.get("opening_goal") or "\n".join(transcript.opening_turns(transcript_path))
+    opening = data.get("opening_goal") or "\n".join(transcript.opening_turns(transcript_path))
     recent = "\n".join(transcript.recent_turns(transcript_path))
-    if not goal or not recent:
+    if not opening or not recent:
         return
-    score, label = score_drift(goal, recent)
-    data["score"] = score
-    data["label"] = label
-    data["opening_goal"] = goal
+    # Tail, not head: the ask lives at the END of assistant messages.
+    tail = (transcript.last_assistant_text(transcript_path) or "")[-ASSISTANT_TAIL_CHARS:]
+    want_goal = not data.get("goal")
+    result = orient(opening, recent, tail, data.get("gist"), want_goal, runner=runner)
+    if result is None:
+        # Parse failure: record ONLY the failure timestamp — the last good
+        # data must persist and honestly age (never a green blank).
+        data["last_failure_ts"] = _now_iso()
+        cache.save_cache(session_id, data)
+        return
+    data["score"] = result["score"]
+    data["gist"] = result["gist"]
+    data["open_loop"] = result["open_loop"]
+    if want_goal and "goal" in result:
+        data["goal"] = result["goal"]   # keep-first: never overwritten later
+    data["opening_goal"] = opening
     data["ts"] = _now_iso()
-    data["turns_at_last_compute"] = data.get("turns_seen", 0)
+    data["turns_at_last_compute"] = turns_now
+    data.pop("label", None)        # v1 field: dies in v2
+    data.pop("turns_seen", None)   # v1 counter: lives in .turns now
     cache.save_cache(session_id, data)
 
 
-# src/whereami/drift.py  (append)
-import os
-import subprocess
-import sys
-import time
-
-THROTTLE_TURNS = 6
-
-
-def _spawn_compute(session_id: str, transcript_path: str) -> None:
-    subprocess.Popen(
-        [sys.executable, "-m", "whereami.drift", "--compute", session_id, transcript_path],
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+def hook_due(data: Dict, turns: int) -> bool:
+    if not data.get("ts"):
+        return True
+    if not data.get("gist"):
+        return True   # v1→v2 transition self-heal (turn-delta may be negative)
+    return turns - data.get("turns_at_last_compute", 0) >= THROTTLE_TURNS
 
 
 def run_hook() -> None:
@@ -108,23 +92,20 @@ def run_hook() -> None:
     transcript_path = payload.get("transcript_path")
     if not session_id or not transcript_path:
         sys.exit(0)
-
-    data = cache.load_cache(session_id)
-    data["turns_seen"] = data.get("turns_seen", 0) + 1
-    cache.save_cache(session_id, data)
-
-    due = (not data.get("ts")) or (
-        data["turns_seen"] - data.get("turns_at_last_compute", 0) >= THROTTLE_TURNS
-    )
-    if due:
-        _spawn_compute(session_id, transcript_path)
+    turns = cache.increment_turns(session_id)
+    if hook_due(cache.load_cache(session_id), turns):
+        maybe_spawn_compute(session_id, transcript_path)
+    sweep_stale_files()
     sys.exit(0)
 
 
-SPAWN_SLOP = 15          # seconds: spawn + interpreter-startup allowance
-MARKER_TTL = 150         # seconds; invariant: >= 2 * (CLI_TIMEOUT + SPAWN_SLOP)
-FAILURE_BACKOFF = 600    # seconds between retries after a parse failure
-SWEEP_AGE = 86400        # 1 day: opportunistic cleanup threshold
+def _spawn_compute(session_id: str, transcript_path: str) -> None:
+    subprocess.Popen(
+        [sys.executable, "-m", "whereami.drift", "--compute", session_id, transcript_path],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def in_failure_backoff(data: Dict, now: float) -> bool:
@@ -273,7 +254,11 @@ def build_prompt(opening_goal: str, recent: str, assistant_tail: str,
 def parse_orientation(text: str, want_goal: bool) -> Optional[Dict]:
     """Field-tolerant parse: accepted iff score and gist validate; bad
     open_loop coerced to ""; missing goal ignored. None only on score/gist
-    failure — one malformed minor field must not discard a good score+gist."""
+    failure — one malformed minor field must not discard a good score+gist.
+
+    The greedy regex is deliberate — it handles nested braces in string
+    values; off-distribution multi-object replies fall through to the
+    failure path."""
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         return None
