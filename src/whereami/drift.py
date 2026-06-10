@@ -85,6 +85,7 @@ def compute(session_id: str, transcript_path: str) -> None:
 import os
 import subprocess
 import sys
+import time
 
 THROTTLE_TURNS = 6
 
@@ -118,6 +119,113 @@ def run_hook() -> None:
     if due:
         _spawn_compute(session_id, transcript_path)
     sys.exit(0)
+
+
+SPAWN_SLOP = 15          # seconds: spawn + interpreter-startup allowance
+MARKER_TTL = 150         # seconds; invariant: >= 2 * (CLI_TIMEOUT + SPAWN_SLOP)
+FAILURE_BACKOFF = 600    # seconds between retries after a parse failure
+SWEEP_AGE = 86400        # 1 day: opportunistic cleanup threshold
+
+
+def in_failure_backoff(data: Dict, now: float) -> bool:
+    """True while last_failure_ts is newer than ts AND younger than
+    FAILURE_BACKOFF. Without this, a persistent parse failure (which never
+    advances ts) would burn one rate-limit call per turn, forever."""
+    fail = cache.ts_to_epoch(data.get("last_failure_ts"))
+    if fail is None:
+        return False
+    ts = cache.ts_to_epoch(data.get("ts"))
+    if ts is not None and ts >= fail:
+        return False
+    return (now - fail) < FAILURE_BACKOFF
+
+
+def _acquire_marker(marker, now: float) -> bool:
+    try:
+        os.close(os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        return True
+    except FileExistsError:
+        pass
+    except OSError:
+        return False
+    try:
+        age = now - os.stat(str(marker)).st_mtime
+    except OSError:
+        return False          # vanished between EEXIST and stat: someone owns it
+    if age < MARKER_TTL:
+        return False          # a compute is in flight
+    # Stale: reclaim by rename — exactly one renamer wins. Unlink-reclaim
+    # could let two racers each delete the other's FRESH marker → double-spawn.
+    # The .tmp suffix lets the sweep collect a leaked grave file.
+    grave = str(marker) + ".reclaim.{}.tmp".format(os.getpid())
+    try:
+        os.rename(str(marker), grave)
+    except OSError:
+        return False          # ENOENT: another process is reclaiming — skip
+    try:
+        os.unlink(grave)
+    except OSError:
+        pass
+    try:
+        os.close(os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        return True
+    except OSError:
+        return False
+
+
+def maybe_spawn_compute(session_id: str, transcript_path: str,
+                        now: Optional[float] = None,
+                        spawner: Optional[Callable[[str, str], None]] = None) -> bool:
+    """The ONLY path that spawns a compute — used by the Stop hook and the
+    renderer. Marker file = in-flight guard. Returns True iff spawned."""
+    now = time.time() if now is None else now
+    if in_failure_backoff(cache.load_cache(session_id), now):
+        return False
+    cache.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    marker = cache.marker_path(session_id)
+    if not _acquire_marker(marker, now):
+        return False
+    spawn = spawner if spawner is not None else _spawn_compute
+    try:
+        spawn(session_id, transcript_path)
+    except BaseException:
+        try:
+            os.unlink(str(marker))
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def _compute_entry(session_id: str, transcript_path: str) -> None:
+    """Detached-child entrypoint: the marker must come off on every exit —
+    success, early return (no goal/recent), parse failure, or exception."""
+    try:
+        compute(session_id, transcript_path)
+    finally:
+        try:
+            os.unlink(str(cache.marker_path(session_id)))
+        except OSError:
+            pass   # a stale-reclaim may have renamed it away
+
+
+def sweep_stale_files(now: Optional[float] = None) -> None:
+    """Remove day-old *.tmp / *.computing leftovers. A live marker is at most
+    ~MARKER_TTL old and live tmp files exist for milliseconds — the sweep can
+    never race them. Cache .json files are never deleted (v3 data source)."""
+    now = time.time() if now is None else now
+    try:
+        entries = list(cache.CACHE_DIR.iterdir())
+    except OSError:
+        return
+    for p in entries:
+        if not (p.name.endswith(".tmp") or p.name.endswith(".computing")):
+            continue
+        try:
+            if now - p.stat().st_mtime > SWEEP_AGE:
+                p.unlink()
+        except OSError:
+            pass
 
 
 _ORIENT_RULES = """\
@@ -202,6 +310,6 @@ def orient(opening_goal: str, recent: str, assistant_tail: str,
 
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "--compute":
-        compute(sys.argv[2], sys.argv[3])
+        _compute_entry(sys.argv[2], sys.argv[3])
     else:
         run_hook()
