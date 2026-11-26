@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-25
+
+Slimmed down to the two lines that get used. Claude Code now covers the deep
+"where was I" view natively (`/recap`, the automatic session recap, `/focus`),
+and the peek panel had not been opened since June.
+
+### Fixed
+
+- **Line 2 showed system text instead of your message.** Background-task
+  notifications, messages from other sessions, compact summaries and
+  slash-command output are all logged as user entries. whereami now reads the
+  transcript's `origin.kind` (falling back to known prefixes for older
+  transcripts). Checked against 150 local sessions: 24 wrong before, 0 after.
+- **Messages typed while Claude was working never appeared.** They are stored
+  as `queued_command` attachments; whereami now reads them.
+- **The last message was missed after long tool runs.** The renderer looked
+  only 200 lines back; it now scans backward up to 8 MB.
+- **Each scoring call saved its own session transcript.** Calls now pass
+  `--no-session-persistence`.
+- **Headless runs were scored.** The Stop hook now skips `claude -p` / SDK
+  sessions.
+- A peek test spawned a real compute child that wrote to the real cache and
+  called the real CLI. Tests now refuse real spawns.
+
+### Removed
+
+- The peek panel, its ⌥W hotkey wiring (Hammerspoon/Raycast), and the
+  1-second `refreshInterval` that existed only for it.
+- The `/whereami` skill. Use `/recap` (or `/focus`) instead.
+- The capability probe and the unstripped fallback call. The stripping flags
+  are standard on current CLIs; a CLI that rejects one lands in the normal
+  failure backoff.
+- `open_loop` and `goal` from the model's reply (shown only in peek).
+
 ## [0.3.0] - 2026-06-10
 
 The token diet. Each orientation compute is ~20× cheaper, so the periodic
@@ -109,6 +143,7 @@ Initial release: the drift dot.
   extraction from Claude Code transcript JSONL.
 - Read-only `/whereami` skill for an in-context deep view.
 
+[0.4.0]: https://github.com/bestes206/claude-whereami/releases/tag/v0.4.0
 [0.3.0]: https://github.com/bestes206/claude-whereami/releases/tag/v0.3.0
 [0.2.0]: https://github.com/bestes206/claude-whereami/releases/tag/v0.2.0
 [0.1.0]: https://github.com/bestes206/claude-whereami/commits/main

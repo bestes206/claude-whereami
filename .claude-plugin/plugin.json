@@ -1,7 +1,7 @@
 {
   "name": "whereami",
-  "version": "0.2.0",
-  "description": "Live in-session orientation in the Claude Code statusline: what the session is doing now vs. its original goal, drift, the open loop — plus a hotkey peek panel. Zero context cost.",
+  "version": "0.4.0",
+  "description": "Two-line Claude Code statusline: a drift-colored gist of what the session is doing now, and your last typed message. Zero context cost.",
   "author": {
     "name": "Bryan Estes"
   },
