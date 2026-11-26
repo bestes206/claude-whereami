@@ -9,74 +9,48 @@ from whereami import cache, drift
 
 def test_orient_parses_full_contract():
     out = drift.orient(
-        "goal", "recent", "tail", None, True,
+        "goal", "recent", "tail", None,
         runner=lambda p: '{"score": 58, "gist": "CI retry backoff logic", '
                          '"open_loop": "choose a backoff strategy", '
                          '"goal": "reorientation tool"}')
-    assert out == {"score": 58, "gist": "CI retry backoff logic",
-                   "open_loop": "choose a backoff strategy",
-                   "goal": "reorientation tool"}
+    # Extra fields a model adds (open_loop/goal from the pre-0.4 contract) are ignored.
+    assert out == {"score": 58, "gist": "CI retry backoff logic"}
 
 
 def test_orient_junk_reply_is_parse_failure():
-    assert drift.orient("g", "r", "t", None, True, runner=lambda p: "sorry, no") is None
-    assert drift.orient("g", "r", "t", None, True, runner=lambda p: "") is None
+    assert drift.orient("g", "r", "t", None, runner=lambda p: "sorry, no") is None
+    assert drift.orient("g", "r", "t", None, runner=lambda p: "") is None
 
 
 def test_orient_missing_or_blank_gist_is_parse_failure():
-    assert drift.orient("g", "r", "t", None, False,
+    assert drift.orient("g", "r", "t", None,
                         runner=lambda p: '{"score": 10}') is None
-    assert drift.orient("g", "r", "t", None, False,
+    assert drift.orient("g", "r", "t", None,
                         runner=lambda p: '{"score": 10, "gist": "  "}') is None
 
 
 def test_orient_bad_score_is_parse_failure():
-    assert drift.orient("g", "r", "t", None, False,
+    assert drift.orient("g", "r", "t", None,
                         runner=lambda p: '{"score": "high", "gist": "parser work"}') is None
 
 
 def test_orient_score_clamped():
-    out = drift.orient("g", "r", "t", None, False,
+    out = drift.orient("g", "r", "t", None,
                        runner=lambda p: '{"score": 250, "gist": "parser work", '
                                         '"open_loop": ""}')
     assert out["score"] == 100
 
 
-def test_orient_bad_or_missing_open_loop_coerced_to_empty():
-    out = drift.orient("g", "r", "t", None, False,
-                       runner=lambda p: '{"score": 5, "gist": "parser work", '
-                                        '"open_loop": 42}')
-    assert out["open_loop"] == ""
-    out = drift.orient("g", "r", "t", None, False,
-                       runner=lambda p: '{"score": 5, "gist": "parser work"}')
-    assert out["open_loop"] == ""
-
-
-def test_orient_missing_goal_ignored():
-    out = drift.orient("g", "r", "t", None, True,
-                       runner=lambda p: '{"score": 5, "gist": "parser work", '
-                                        '"open_loop": ""}')
-    assert "goal" not in out
-
-
-def test_build_prompt_goal_field_only_when_wanted():
-    with_goal = drift.build_prompt("g", "r", "t", None, True)
-    without = drift.build_prompt("g", "r", "t", None, False)
-    assert '"goal"' in with_goal
-    assert '"goal"' not in without
-
-
 def test_build_prompt_continuity_includes_previous_gist():
-    p = drift.build_prompt("g", "r", "t", "CI retry backoff logic", False)
+    p = drift.build_prompt("g", "r", "t", "CI retry backoff logic")
     assert 'Previous gist: "CI retry backoff logic"' in p
     assert "keep it unless the focus genuinely changed" in p
-    assert "Previous gist" not in drift.build_prompt("g", "r", "t", None, False)
+    assert "Previous gist" not in drift.build_prompt("g", "r", "t", None)
 
 
 def test_build_prompt_includes_assistant_tail_and_hardening():
-    p = drift.build_prompt("g", "r", "the ask is at the end", None, False)
+    p = drift.build_prompt("g", "r", "the ask is at the end", None)
     assert "the ask is at the end" in p
-    assert "never invent an ask" in p   # open_loop must be "" when nothing is awaited
     assert "forbidden" in p             # generic gist words banned
     assert "USER" in p                  # describe the user's intent, not agent busywork
 
@@ -99,6 +73,11 @@ def _transcript(tmp_path, assistant_text="want me to proceed?"):
 
 
 def _run_hook_with(monkeypatch, payload, spawned):
+    # An interactive session always has a transcript on disk by its first Stop;
+    # a missing one now means a headless --no-session-persistence run.
+    path = payload.get("transcript_path")
+    if path and not os.path.exists(path):
+        open(path, "w").close()
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     monkeypatch.setattr(drift, "_spawn_compute",
                         lambda sid, path: spawned.append((sid, path)))
@@ -120,8 +99,7 @@ def test_compute_writes_v2_schema(tmp_path, monkeypatch):
     out = cache.load_cache("s1")
     assert out["score"] == 58
     assert out["gist"] == "CI retry backoff logic"
-    assert out["open_loop"] == "choose a backoff strategy"
-    assert out["goal"] == "reorientation tool"
+    assert "open_loop" not in out and "goal" not in out
     assert out["turns_at_last_compute"] == 6
     assert out["opening_goal"]
     assert out["ts"]
@@ -140,56 +118,6 @@ def test_compute_prompt_uses_tail_700_of_assistant_message(tmp_path, monkeypatch
     drift.compute("s1", str(p), runner=runner)
     assert "B" * 700 in prompts[0]   # the tail survives whole
     assert "AB" not in prompts[0]    # the head (and the head/tail seam) is gone
-
-
-def test_compute_goal_keep_first_and_prompt_drops_goal(tmp_path, monkeypatch):
-    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
-    p = _transcript(tmp_path)
-    prompts = []
-
-    def recording(reply):
-        def runner(prompt):
-            prompts.append(prompt)
-            return reply
-        return runner
-
-    drift.compute("s1", str(p), runner=recording(GOOD_REPLY))
-    drift.compute("s1", str(p), runner=recording(
-        '{"score": 5, "gist": "deploy fixes", "open_loop": "", '
-        '"goal": "DIFFERENT GOAL"}'))
-    out = cache.load_cache("s1")
-    assert out["goal"] == "reorientation tool"   # keep-first: never overwritten
-    assert '"goal"' in prompts[0]
-    assert '"goal"' not in prompts[1]            # re-asking is pure token waste
-
-
-def test_hand_edited_goal_during_slow_compute_sticks(tmp_path, monkeypatch):
-    # The spec's escape hatch: "hand-edit the goal field — it is never
-    # overwritten, so the edit sticks." The compute's dict predates a ≤60s
-    # LLM call, so it must re-read the goal before saving — on the success
-    # path AND the parse-failure path.
-    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
-    p = _transcript(tmp_path)
-
-    def editing_runner(edit, reply):
-        def runner(prompt):
-            data = cache.load_cache("s1")
-            data["goal"] = edit
-            cache.save_cache("s1", data)
-            return reply
-        return runner
-
-    cache.save_cache("s1", {"goal": "model goal", "score": 1, "gist": "old",
-                            "opening_goal": "build a parser",
-                            "ts": "2026-06-09T10:00:00-07:00",
-                            "turns_at_last_compute": 0})
-    drift.compute("s1", str(p), runner=editing_runner(
-        "FIRST EDIT", '{"score": 5, "gist": "deploy fixes", "open_loop": ""}'))
-    assert cache.load_cache("s1")["goal"] == "FIRST EDIT"
-
-    drift.compute("s1", str(p), runner=editing_runner(
-        "SECOND EDIT", "not json at all"))
-    assert cache.load_cache("s1")["goal"] == "SECOND EDIT"
 
 
 def test_compute_continuity_feeds_previous_gist(tmp_path, monkeypatch):
@@ -225,11 +153,13 @@ def test_compute_drops_dead_v1_fields_on_success(tmp_path, monkeypatch):
     p = _transcript(tmp_path)
     cache.save_cache("s1", {"score": 1, "label": "old label", "turns_seen": 40,
                             "turns_at_last_compute": 40, "ts": "x",
-                            "opening_goal": "build a parser"})
+                            "opening_goal": "build a parser",
+                            "open_loop": "pick one", "goal": "old goal"})
     drift.compute("s1", str(p), runner=lambda prompt: GOOD_REPLY)
     out = cache.load_cache("s1")
     assert "label" not in out        # the label field dies; gist replaces it
     assert "turns_seen" not in out   # the counter lives in .turns now
+    assert "open_loop" not in out and "goal" not in out   # peek-only, gone in 0.4
 
 
 def test_turns_landing_during_slow_compute_are_preserved(tmp_path, monkeypatch):
@@ -284,11 +214,11 @@ def test_orient_bool_or_infinite_score_is_parse_failure():
     # int(True) == 1 would cache "yes, drifted" as a near-best score; and
     # json.loads accepts Infinity, where int() raises OverflowError — both
     # must be parse failures, not crashes or inverted signals.
-    assert drift.orient("g", "r", "t", None, False,
+    assert drift.orient("g", "r", "t", None,
                         runner=lambda p: '{"score": true, "gist": "auth work"}') is None
-    assert drift.orient("g", "r", "t", None, False,
+    assert drift.orient("g", "r", "t", None,
                         runner=lambda p: '{"score": Infinity, "gist": "auth work"}') is None
-    assert drift.orient("g", "r", "t", None, False,
+    assert drift.orient("g", "r", "t", None,
                         runner=lambda p: '{"score": NaN, "gist": "auth work"}') is None
 
 
@@ -354,8 +284,10 @@ def test_hook_due_via_gist_arm_on_v1_cache(tmp_path, monkeypatch):
 
 def test_hook_goes_through_guard(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    t = tmp_path / "t.jsonl"
+    t.write_text("")
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
-        {"session_id": "s1", "transcript_path": "/t"})))
+        {"session_id": "s1", "transcript_path": str(t)})))
     monkeypatch.setattr(drift, "_spawn_compute", lambda sid, path: None)
     try:
         drift.run_hook()
@@ -427,194 +359,7 @@ def test_invoke_subprocess_error_is_empty(monkeypatch):
     assert drift._invoke(["claude"], None) == {}
 
 
-def test_cli_version_returns_stripped_stdout(monkeypatch):
-    class FakeProc:
-        stdout = "2.1.172 (Claude Code)\n"
-
-    monkeypatch.setattr(drift.subprocess, "run", lambda *a, **k: FakeProc())
-    assert drift._cli_version() == "2.1.172 (Claude Code)"
-
-
-def test_cli_version_empty_on_error(monkeypatch):
-    def boom(*a, **k):
-        raise OSError()
-
-    monkeypatch.setattr(drift.subprocess, "run", boom)
-    assert drift._cli_version() == ""
-
-
-def test_build_argv_unstripped_is_todays_behavior():
-    argv = drift._build_argv("PROMPT", stripped=False)
-    assert argv == ["claude", "-p", "PROMPT",
-                    "--model", drift.HAIKU_MODEL, "--output-format", "json"]
-
-
-def test_build_argv_stripped_adds_all_six_flags():
-    argv = drift._build_argv("PROMPT", stripped=True)
-    assert argv[:7] == ["claude", "-p", "PROMPT", "--model", drift.HAIKU_MODEL,
-                        "--output-format", "json"]
-    assert "--exclude-dynamic-system-prompt-sections" in argv
-    assert "--strict-mcp-config" in argv
-    # empty-string args are load-bearing: --tools "" drops ~11K of tool schemas
-    assert argv[argv.index("--tools") + 1] == ""
-    assert argv[argv.index("--setting-sources") + 1] == ""
-    sp = argv[argv.index("--system-prompt") + 1]
-    assert "JSON-only classifier" in sp
-
-
-def test_probe_json_ok_accepts_object_and_fences():
-    assert drift._probe_json_ok('{"answer": 59}') is True
-    assert drift._probe_json_ok('```json\n{"answer": 59}\n```') is True
-    assert drift._probe_json_ok('here: {"answer": 59} done') is True
-
-
-def test_probe_json_ok_rejects_non_object():
-    assert drift._probe_json_ok("sorry, no JSON") is False
-    assert drift._probe_json_ok(None) is False
-    assert drift._probe_json_ok("[1, 2]") is False   # array is not an object
-
-
-def test_output_tokens_reads_usage():
-    assert drift._output_tokens({"usage": {"output_tokens": 42}}) == 42
-    assert drift._output_tokens({}) is None
-    assert drift._output_tokens({"usage": {}}) is None
-    assert drift._output_tokens({"usage": {"output_tokens": True}}) is None  # bool
-
-
-def test_stripped_probe_ok_requires_json_AND_low_tokens():
-    ok = {"result": '{"answer": 59}', "usage": {"output_tokens": 20}}
-    assert drift._stripped_probe_ok(ok) is True
-    # thinking still on → output spikes → reject even though JSON parses
-    hot = {"result": '{"answer": 59}', "usage": {"output_tokens": 2025}}
-    assert drift._stripped_probe_ok(hot) is False
-    # no usage → can't confirm thinking-off → reject
-    assert drift._stripped_probe_ok({"result": '{"answer": 59}'}) is False
-    # not parseable → reject
-    assert drift._stripped_probe_ok(
-        {"result": "thinking out loud", "usage": {"output_tokens": 5}}) is False
-
-
-def test_stripped_supported_cache_hit_skips_probe(tmp_path, monkeypatch):
-    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(drift, "_cli_version", lambda: "2.1.172")
-    cache.save_caps({"cli_version": "2.1.172", "stripped_ok": True})
-
-    def no_probe(*a, **k):
-        raise AssertionError("must not probe on a cache hit")
-
-    monkeypatch.setattr(drift, "_invoke", no_probe)
-    assert drift._stripped_supported() is True
-
-
-def test_stripped_supported_cache_hit_false(tmp_path, monkeypatch):
-    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(drift, "_cli_version", lambda: "1.0.0")
-    cache.save_caps({"cli_version": "1.0.0", "stripped_ok": False})
-
-    def no_probe(*a, **k):
-        raise AssertionError("must not probe on a cache hit")
-
-    monkeypatch.setattr(drift, "_invoke", no_probe)
-    assert drift._stripped_supported() is False
-
-
-def test_stripped_supported_probes_and_caches_true(tmp_path, monkeypatch):
-    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(drift, "_cli_version", lambda: "2.1.172")
-    monkeypatch.setattr(drift, "_invoke",
-                        lambda args, env=None: {"result": '{"answer": 59}',
-                                                "usage": {"output_tokens": 20}})
-    assert drift._stripped_supported() is True
-    assert cache.load_caps() == {"cli_version": "2.1.172", "stripped_ok": True}
-
-
-def test_stripped_supported_flags_unsupported_falls_back(tmp_path, monkeypatch):
-    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(drift, "_cli_version", lambda: "1.0.0")
-    seq = iter([
-        {},  # stripped probe fails (old CLI rejects the flags)
-        {"result": '{"answer": 59}', "usage": {"output_tokens": 1500}},  # unstripped works
-    ])
-    monkeypatch.setattr(drift, "_invoke", lambda *a, **k: next(seq))
-    assert drift._stripped_supported() is False
-    assert cache.load_caps() == {"cli_version": "1.0.0", "stripped_ok": False}
-
-
-def test_stripped_supported_transient_failure_backs_off(tmp_path, monkeypatch):
-    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(drift, "_cli_version", lambda: "2.1.172")
-    calls = []
-
-    def failing(*a, **k):
-        calls.append(a)
-        return {}
-
-    monkeypatch.setattr(drift, "_invoke", failing)
-    assert drift._stripped_supported() is False
-    assert len(calls) == 2   # stripped + unstripped disambiguation
-    caps = cache.load_caps()
-    assert caps.get("probed_at") and "stripped_ok" not in caps
-    # second compute within FAILURE_BACKOFF → reuse, do NOT re-probe
-    calls.clear()
-    assert drift._stripped_supported() is False
-    assert calls == []
-
-
-def test_stripped_supported_reprobes_after_cooldown(tmp_path, monkeypatch):
-    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(drift, "_cli_version", lambda: "2.1.172")
-    stale = (datetime.now().astimezone()
-             - timedelta(seconds=drift.FAILURE_BACKOFF + 60)
-             ).isoformat(timespec="seconds")
-    cache.save_caps({"cli_version": "2.1.172", "probed_at": stale})
-    monkeypatch.setattr(drift, "_invoke",
-                        lambda *a, **k: {"result": '{"answer": 1}',
-                                         "usage": {"output_tokens": 10}})
-    assert drift._stripped_supported() is True   # cooldown elapsed → re-probe
-
-
-def test_stripped_supported_reprobes_on_version_change(tmp_path, monkeypatch):
-    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
-    cache.save_caps({"cli_version": "OLD", "stripped_ok": True})
-    monkeypatch.setattr(drift, "_cli_version", lambda: "NEW")
-    monkeypatch.setattr(drift, "_invoke", lambda *a, **k: {})   # both calls fail
-    assert drift._stripped_supported() is False
-    assert cache.load_caps().get("cli_version") == "NEW"
-
-
-def test_run_claude_uses_stripped_when_supported(monkeypatch):
-    monkeypatch.setattr(drift, "_stripped_supported", lambda: True)
-    captured = {}
-
-    def fake_invoke(args, env=None):
-        captured["args"] = args
-        captured["env"] = env
-        return {"result": '{"score": 1, "gist": "x"}'}
-
-    monkeypatch.setattr(drift, "_invoke", fake_invoke)
-    assert drift._run_claude("PROMPT") == '{"score": 1, "gist": "x"}'
-    assert "--tools" in captured["args"]
-    assert captured["env"] == {"MAX_THINKING_TOKENS": "0"}
-
-
-def test_run_claude_uses_unstripped_when_unsupported(monkeypatch):
-    monkeypatch.setattr(drift, "_stripped_supported", lambda: False)
-    captured = {}
-
-    def fake_invoke(args, env=None):
-        captured["args"] = args
-        captured["env"] = env
-        return {"result": "reply"}
-
-    monkeypatch.setattr(drift, "_invoke", fake_invoke)
-    assert drift._run_claude("PROMPT") == "reply"
-    assert captured["args"] == ["claude", "-p", "PROMPT", "--model",
-                                drift.HAIKU_MODEL, "--output-format", "json"]
-    assert captured["env"] is None   # today's behavior verbatim: no env override
-
-
 def test_run_claude_non_str_result_is_empty(monkeypatch):
-    monkeypatch.setattr(drift, "_stripped_supported", lambda: True)
     monkeypatch.setattr(drift, "_invoke", lambda *a, **k: {"result": {"x": 1}})
     assert drift._run_claude("PROMPT") == ""
 
@@ -746,3 +491,59 @@ def test_persistent_parse_failure_suppresses_hook_spawns(tmp_path, monkeypatch):
     cache.save_cache("s1", data)
     _run_hook_with(monkeypatch, payload, spawned)
     assert len(spawned) == 1
+
+
+# --- slim-down (0.4.0) ------------------------------------------------------
+
+def test_build_argv_always_stripped_and_never_persists_a_session():
+    argv = drift._build_argv("PROMPT")
+    assert argv[:7] == ["claude", "-p", "PROMPT", "--model", drift.HAIKU_MODEL,
+                        "--output-format", "json"]
+    # Each scoring call used to save its own transcript: 1,211 of them on disk.
+    assert "--no-session-persistence" in argv
+    assert argv[argv.index("--tools") + 1] == ""
+    assert argv[argv.index("--setting-sources") + 1] == ""
+
+
+def test_run_claude_makes_exactly_one_call_with_thinking_off(monkeypatch):
+    calls = []
+
+    def fake_invoke(args, env=None):
+        calls.append((args, env))
+        return {"result": '{"score": 1, "gist": "x"}'}
+
+    monkeypatch.setattr(drift, "_invoke", fake_invoke)
+    assert drift._run_claude("PROMPT") == '{"score": 1, "gist": "x"}'
+    assert len(calls) == 1                      # no capability probe, no fallback
+    assert "--no-session-persistence" in calls[0][0]
+    assert calls[0][1] == {"MAX_THINKING_TOKENS": "0"}
+
+
+def test_hook_skips_headless_sessions(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    p = tmp_path / "t.jsonl"
+    p.write_text(json.dumps({"type": "user", "entrypoint": "sdk-cli",
+                             "message": {"role": "user", "content": "run the job"}}) + "\n")
+    spawned = []
+    _run_hook_with(monkeypatch, {"session_id": "s1", "transcript_path": str(p)}, spawned)
+    assert spawned == []
+    assert cache.load_turns("s1") == 0          # leaves nothing behind
+
+
+def test_hook_skips_session_without_transcript(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"session_id": "s1", "transcript_path": str(tmp_path / "gone.jsonl")})))
+    spawned = []
+    monkeypatch.setattr(drift, "_spawn_compute", lambda sid, path: spawned.append(sid))
+    try:
+        drift.run_hook()
+    except SystemExit:
+        pass
+    assert spawned == [] and cache.load_turns("s1") == 0
+
+
+def test_build_prompt_asks_only_for_score_and_gist():
+    prompt = drift.build_prompt("goal", "recent", "tail", None)
+    assert '"score"' in prompt and '"gist"' in prompt
+    assert "open_loop" not in prompt and '"goal"' not in prompt

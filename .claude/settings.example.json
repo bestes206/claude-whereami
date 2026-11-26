@@ -1,8 +1,7 @@
 {
   "statusLine": {
     "type": "command",
-    "command": "/path/to/whereami-venv/bin/whereami-statusline",
-    "refreshInterval": 3
+    "command": "/path/to/whereami-venv/bin/whereami-statusline"
   },
   "hooks": {
     "Stop": [

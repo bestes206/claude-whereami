@@ -24,16 +24,6 @@ def marker_path(session_id: str) -> Path:
     return CACHE_DIR / (_safe(session_id) + ".computing")
 
 
-def peek_path() -> Path:
-    return CACHE_DIR / "peek"
-
-
-def caps_path() -> Path:
-    """Global (not session-scoped) capability cache; keyed internally by
-    `claude --version` so it self-heals across CLI upgrades."""
-    return CACHE_DIR / "capabilities.json"
-
-
 def parse_iso(value) -> Optional[datetime]:
     """ISO-8601 string → datetime, normalizing a trailing 'Z' (UTC) to
     '+00:00'. datetime.fromisoformat rejects bare 'Z' on Python 3.9/3.10, and
@@ -58,10 +48,8 @@ def ts_to_epoch(value) -> Optional[float]:
 
 def failure_epoch(data: Dict) -> Optional[float]:
     """Epoch of an UNHEALED parse failure: last_failure_ts when it is newer
-    than ts, else None (a success at or after the failure clears it). The
-    single definition behind both the spawn backoff and the peek failure
-    badge — the badge is the backoff's only observability, so the two must
-    never diverge."""
+    than ts, else None (a success at or after the failure clears it). Drives
+    the spawn backoff."""
     fail = ts_to_epoch(data.get("last_failure_ts"))
     if fail is None:
         return None
@@ -112,19 +100,6 @@ def load_cache(session_id: str) -> Dict:
 
 def save_cache(session_id: str, data: Dict) -> None:
     _atomic_write(_path(session_id), json.dumps(data))
-
-
-def load_caps() -> Dict:
-    try:
-        with open(caps_path(), "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def save_caps(data: Dict) -> None:
-    _atomic_write(caps_path(), json.dumps(data))
 
 
 def load_turns(session_id: str) -> int:

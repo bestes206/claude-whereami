@@ -4,7 +4,6 @@ import math
 import os
 import re
 import sys
-import time
 from typing import List, Optional
 
 from . import cache, transcript
@@ -17,15 +16,6 @@ _RED = "\033[31m"
 _DIM = "\033[90m"  # bright-black / grey: no data yet
 
 LINE2_LIMIT = 150  # line-2 head-keep ceiling (constant by design: editable install)
-
-PEEK_SECONDS = 30        # peek window; mtime aging out is the auto-collapse
-PEEK_MSG_LIMIT = 600     # peek message hard ceiling (chars)
-PEEK_WRAP_MAX = 100      # wrap at min(terminal columns, this)
-PEEK_MSG_MAX_LINES = 4   # rendered-line cap for the peek message
-GOAL_PAREN_LIMIT = 40    # opening_goal head-truncation in the parenthetical
-SPLIT_SCORE = 85         # split? when score alone exceeds this
-SPLIT_SCORE_WITH_CTX = 66  # …or score exceeds this AND context-% exceeds:
-SPLIT_CTX_PCT = 70
 
 
 def truncate(text: str, limit: int) -> str:
@@ -78,19 +68,6 @@ def _color_for(score: int) -> str:
     if score <= 66:
         return _AMBER
     return _RED
-
-
-def drift_label(score: int) -> str:
-    """A plain-language band for the drift score — no decoder ring. Four levels
-    aligned to the color buckets; the top band lines up with the split? threshold
-    (SPLIT_SCORE = 85), so "way off" and "time to split" coincide."""
-    if score <= 33:
-        return "on track"
-    if score <= 66:
-        return "drifting"
-    if score <= 84:
-        return "off track"
-    return "way off"
 
 
 # Terminal-active bytes in rendered text: whole CSI/OSC sequences (pasted
@@ -162,173 +139,11 @@ def render_normal(data: dict, cached: dict, last: Optional[str]) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Peek helpers
-# ---------------------------------------------------------------------------
-
-def peek_active(now: float) -> bool:
-    try:
-        mtime = os.stat(str(cache.peek_path())).st_mtime
-    except OSError:
-        return False
-    age = now - mtime
-    return 0 <= age < PEEK_SECONDS   # lower clamp: a future-dated mtime is inert
-
-
-# Past this, a lingering compute marker is a crashed compute, not work in
-# flight (mirrors drift.CLI_TIMEOUT) — so "scoring…" can't get stuck on.
-MARKER_INFLIGHT_TTL = 60
-
-
-def compute_in_flight(session_id: str, now: float) -> bool:
-    """True while a fresh compute marker exists — a recompute is running and a
-    new score is on its way. Drives the peek "scoring…" indicator."""
-    try:
-        age = now - os.stat(str(cache.marker_path(session_id))).st_mtime
-    except OSError:
-        return False
-    return 0 <= age < MARKER_INFLIGHT_TTL   # lower clamp as in peek_active
-
-
-def fmt_ago(secs: float) -> str:
-    secs = max(0, int(secs))
-    if secs < 60:
-        return "{}s".format(secs)
-    mins = secs // 60
-    if mins < 60:
-        return "{}m".format(mins)
-    hours = mins // 60
-    if hours < 24:
-        return "{}h".format(hours)
-    return "{}d".format(hours // 24)
-
-
-def staleness_segment(cached: dict, now: float) -> str:
-    """Staleness in TIME, never turns: on a resumed session the turn-delta is
-    0 while the data is days old — a turn display would claim max freshness."""
-    ts = cache.ts_to_epoch(cached.get("ts"))
-    if ts is None:
-        return "no score yet"
-    return "scored {} ago".format(fmt_ago(now - ts))
-
-
-def failure_segment(cached: dict, now: float) -> Optional[str]:
-    fail = cache.failure_epoch(cached)
-    if fail is None:
-        return None
-    return "last compute failed {} ago".format(fmt_ago(now - fail))
-
-
-def split_hint(cached: dict, ctx_pct: Optional[int]) -> bool:
-    score = _score_value(cached)
-    if score is None:
-        return False
-    if score > SPLIT_SCORE:
-        return True   # fully drifted, even with low context
-    return score > SPLIT_SCORE_WITH_CTX and ctx_pct is not None and ctx_pct > SPLIT_CTX_PCT
-
-
-def _peek_width() -> int:
-    import shutil  # lazy: peek-only, off the every-3s render path
-
-    # The renderer has no tty: get_terminal_size falls back to COLUMNS, else 80.
-    return min(shutil.get_terminal_size((80, 24)).columns, PEEK_WRAP_MAX)
-
-
-def wrap_message(text: str, width: int) -> List[str]:
-    """Head-keep to PEEK_MSG_LIMIT, wrap, cap at PEEK_MSG_MAX_LINES; any
-    truncation ends the visible text with an ellipsis."""
-    import textwrap  # lazy: peek-only, off the every-3s render path
-
-    collapsed = _collapse(text)
-    truncated = len(collapsed) > PEEK_MSG_LIMIT
-    body = collapsed[:PEEK_MSG_LIMIT]
-    avail = max(10, width - 2)   # room for the "❯ " prefix / 2-space indent
-    lines = textwrap.wrap(body, width=avail) or [""]
-    if len(lines) > PEEK_MSG_MAX_LINES:
-        lines = lines[:PEEK_MSG_MAX_LINES]
-        truncated = True
-    if truncated:
-        last = lines[-1]
-        if len(last) + 1 > avail:
-            last = last[: avail - 1]
-        lines[-1] = last + "…"
-    out = ["❯ " + lines[0]]
-    out.extend("  " + l for l in lines[1:])
-    return out
-
-
-def open_loop_line(cached: dict, turns: int) -> Optional[str]:
-    loop = _clean(cached.get("open_loop"))
-    if not loop:
-        return None   # nothing awaited → no line, never a fabricated ask
-    # Any turns since the score → presumptively already answered → dim
-    # ("probably answered / refreshing"). A count BEHIND the cache (reset
-    # .turns) is inconsistent, so equally presumptively stale.
-    stale = turns != cache.turns_at_last_compute(cached)
-    text = "⊙ your turn: " + loop
-    return _DIM + text + _RESET if stale else text
-
-
-def render_peek(data: dict, cached: dict, last: Optional[str],
-                turns: int, now: float, session_id: str = "") -> str:
-    score = _score_value(cached)
-    gist = _clean(cached.get("gist"))
-    scored = score is not None and bool(gist)
-    if scored:
-        label = drift_label(score)
-        if os.environ.get("WHEREAMI_SHOW_DRIFT_SCORE"):
-            label = "{} ({})".format(label, score)
-        head = _color_for(score) + "{} · {}".format(label, gist) + _RESET
-        goal = truncate(_clean(cached.get("goal")) or _clean(cached.get("opening_goal")),
-                        GOAL_PAREN_LIMIT)
-        if goal:
-            head += "  " + _DIM + "(goal: {})".format(goal) + _RESET
-    else:
-        head = _DIM + "…" + _RESET   # degraded: no "drift —", no empty parenthetical
-    lines = [head]
-    if last:
-        lines.extend(wrap_message(last, _peek_width()))
-    loop = open_loop_line(cached, turns)
-    if loop:
-        lines.append(loop)
-    tail = _gauges(data) + [staleness_segment(cached, now)]
-    if compute_in_flight(session_id, now):
-        tail.append("scoring…")   # a fresh score is on its way — you're not stuck
-    failure = failure_segment(cached, now)
-    if failure:
-        tail.append(failure)
-    # Only a panel that shows the score may act on it: a not-yet-scored
-    # placeholder must not recommend a split from the same unusable score.
-    if scored and split_hint(cached, context_pct(data)):
-        tail.append("split?")
-    lines.append(" · ".join(tail))
-    return "\n".join(lines)
-
-
-def _maybe_recompute(session_id: str, transcript_path: str,
-                     cached: dict, turns: int) -> None:
-    """The renderer's only write path (via the shared spawn guard). Entirely
-    exception-swallowed: rendering must never break."""
-    try:
-        from . import drift   # lazy: keep normal-mode startup fast
-        if drift.peek_due(cached, turns):
-            drift.maybe_spawn_compute(session_id, transcript_path, data=cached)
-    except BaseException:
-        pass
-
-
-def render(data: dict, now: Optional[float] = None) -> str:
-    now = time.time() if now is None else now
+def render(data: dict) -> str:
     session_id = data.get("session_id", "")
     transcript_path = data.get("transcript_path", "")
     cached = cache.load_cache(session_id)
     last = transcript.last_human_text(transcript_path) if transcript_path else None
-    if peek_active(now):
-        turns = cache.load_turns(session_id)
-        if session_id and transcript_path:
-            _maybe_recompute(session_id, transcript_path, cached, turns)
-        return render_peek(data, cached, last, turns, now, session_id)
     return render_normal(data, cached, last)
 
 

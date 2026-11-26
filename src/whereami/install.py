@@ -1,9 +1,7 @@
 """One-command setup for whereami.
 
 `whereami install` (or `python3 scripts/install.py`) wires the statusline and
-Stop hook into ~/.claude/settings.json, creates the peek directory, and sets up
-the ⌥W peek hotkey — auto-detecting Hammerspoon or Raycast, and offering to
-install one if neither is present.
+Stop hook into ~/.claude/settings.json.
 
 Design mirrors the rest of the package: the risky decisions are pure functions
 (no I/O, fully unit-tested), and main() is a thin orchestration layer over them.
@@ -13,7 +11,6 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Callable, Optional, Tuple
@@ -24,13 +21,6 @@ STATUSLINE_GLOB = (
     'python3 "$(ls -dt ~/.claude/plugins/cache/*/whereami/*/scripts/'
     'statusline.py | head -1)"'
 )
-
-HS_MARKER = "-- whereami peek hotkey"
-
-# Statusline poll interval (seconds). 1, not the prior 3, so the peek panel
-# appears promptly on the hotkey and a fresh score shows up sooner — the
-# render is a cheap read-only path, so polling 1×/s is comfortably affordable.
-STATUSLINE_REFRESH = 1
 
 # Both wired statusline forms reference whereami; a foreign statusline won't.
 _OURS_MARKERS = ("whereami", "statusline.py")
@@ -79,7 +69,9 @@ def resolve_commands(scripts_dir=None, argv0=None,
 # --- settings.json patching (pure) --------------------------------------
 
 def _statusline_block(cmd: str) -> dict:
-    return {"type": "command", "command": cmd, "refreshInterval": STATUSLINE_REFRESH}
+    # No refreshInterval: the statusline redraws on Claude Code's own events,
+    # which is all the gist and last-message lines need.
+    return {"type": "command", "command": cmd}
 
 
 def _is_ours(cmd: str) -> bool:
@@ -167,96 +159,16 @@ def save_settings(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-# --- hotkey detection & choice ------------------------------------------
-
-def detect_hotkey_tool(home: Path,
-                       path_exists: Callable[[str], bool] = os.path.exists
-                       ) -> Optional[str]:
-    """Return 'hammerspoon', 'raycast', or None. Hammerspoon wins ties — it's
-    the only one we can wire end-to-end with no GUI step."""
-    if (path_exists("/Applications/Hammerspoon.app")
-            or path_exists(str(Path(home) / ".hammerspoon" / "init.lua"))):
-        return "hammerspoon"
-    if path_exists("/Applications/Raycast.app"):
-        return "raycast"
-    return None
-
-
-def decide_hotkey(*, detected: Optional[str], requested: str,
-                  no_input: bool = False) -> str:
-    """Resolve the --hotkey flag against what's installed.
-
-    Returns one of: 'hammerspoon', 'raycast', 'none', or 'prompt' (ask the user
-    whether to install a tool). 'prompt' never escapes when --no-input is set.
-    """
-    if requested != "auto":
-        return requested
-    if detected is not None:
-        return detected
-    return "none" if no_input else "prompt"
-
-
-# --- hotkey wiring -------------------------------------------------------
-
-def hammerspoon_snippet(peek_path: str) -> str:
-    return (
-        "\n{marker}\n"
-        'hs.hotkey.bind({{"alt"}}, "W", function() '
-        'hs.execute("touch {peek}") end)\n'
-    ).format(marker=HS_MARKER, peek=peek_path)
-
-
-def wire_hammerspoon(init_path: Path, peek_path: str) -> str:
-    """Append a marker-guarded ⌥W binding to init.lua. Idempotent."""
-    init_path = Path(init_path)
-    text = init_path.read_text() if init_path.exists() else ""
-    if HS_MARKER in text:
-        return "already"
-    init_path.parent.mkdir(parents=True, exist_ok=True)
-    init_path.write_text(text + hammerspoon_snippet(peek_path))
-    return "added"
-
-
-def raycast_script_content(peek_path: str) -> str:
-    return (
-        "#!/bin/bash\n"
-        "# @raycast.schemaVersion 1\n"
-        "# @raycast.title whereami peek\n"
-        "# @raycast.mode silent\n"
-        "# @raycast.packageName whereami\n"
-        "touch {}\n"
-    ).format(peek_path)
-
-
-def wire_raycast(scripts_dir: Path, peek_path: str) -> Path:
-    scripts_dir = Path(scripts_dir)
-    scripts_dir.mkdir(parents=True, exist_ok=True)
-    script = scripts_dir / "whereami-peek.sh"
-    script.write_text(raycast_script_content(peek_path))
-    script.chmod(0o755)
-    return script
-
-
 # --- orchestration -------------------------------------------------------
 
 def _settings_path(home: Path) -> Path:
     return Path(home) / ".claude" / "settings.json"
 
 
-def _peek_path(home: Path) -> str:
-    return str(Path(home) / ".claude" / "whereami" / "peek")
-
-
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="whereami install",
-        description="Wire whereami's statusline, hook, and peek hotkey.")
-    p.add_argument("--hotkey", choices=["auto", "hammerspoon", "raycast", "none"],
-                   default="auto", help="hotkey tool (default: auto-detect)")
-    p.add_argument("--yes", action="store_true",
-                   help="accept install prompts (e.g. brew) non-interactively")
-    p.add_argument("--no-input", action="store_true",
-                   help="never prompt; skip the hotkey if no tool is detected")
+        description="Wire whereami's statusline and Stop hook.")
     p.add_argument("--force", action="store_true",
                    help="overwrite an existing non-whereami statusline")
     p.add_argument("--dry-run", action="store_true",
@@ -264,20 +176,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _warm_capabilities(out) -> None:
-    """Prime the version-keyed capability cache so the first real compute isn't
-    delayed by the probe. Best-effort: never fail the install over it. The lazy
-    cache stays the source of truth and self-heals across CLI upgrades."""
-    try:
-        from whereami import drift
-        ok = drift._stripped_supported()
-        print("  capability probe: {}".format("stripped" if ok else "unstripped"),
-              file=out)
-    except Exception:
-        print("  capability probe: skipped", file=out)
-
-
-def main(argv=None, *, scripts_dir=None, warm=_warm_capabilities) -> int:
+def main(argv=None, *, scripts_dir=None) -> int:
     args = build_arg_parser().parse_args(argv)
     home = Path(os.path.expanduser("~"))
     out = sys.stdout
@@ -298,92 +197,16 @@ def main(argv=None, *, scripts_dir=None, warm=_warm_capabilities) -> int:
         print("  ! a different statusLine is set; re-run with --force to replace it.",
               file=out)
 
-    detected = detect_hotkey_tool(home)
-    choice = decide_hotkey(detected=detected, requested=args.hotkey,
-                           no_input=args.no_input)
-
     if args.dry_run:
         print("  (dry run — no files written)", file=out)
-        print("  hotkey: would use {}".format(choice), file=out)
         return 0
 
     if new != current:
         backup(settings_path)
         save_settings(settings_path, new)
-    Path(_peek_path(home)).parent.mkdir(parents=True, exist_ok=True)
-
-    _apply_hotkey(choice, home, out, no_input=args.no_input, yes=args.yes)
-    warm(out)
     print("Done. Restart Claude Code (or wait for the next statusline tick).",
           file=out)
     return 0
-
-
-def _apply_hotkey(choice: str, home: Path, out, *, no_input: bool, yes: bool) -> None:
-    peek = _peek_path(home)
-    if choice == "none":
-        print("  hotkey: skipped (trigger peek with `touch {}`)".format(peek),
-              file=out)
-        return
-    if choice == "prompt":
-        choice = _prompt_install_tool(out) if not no_input else "none"
-        if choice in (None, "none"):
-            print("  hotkey: skipped (re-run `whereami install` to set one up)",
-                  file=out)
-            return
-        _brew_install(choice, out, yes=yes)
-    if choice == "hammerspoon":
-        result = wire_hammerspoon(home / ".hammerspoon" / "init.lua", peek)
-        print("  hotkey: ⌥W via Hammerspoon ({})".format(result), file=out)
-        _reload_hammerspoon(out)
-    elif choice == "raycast":
-        script = wire_raycast(home / ".raycast-scripts", peek)
-        print("  hotkey: Raycast script written to {}".format(script), file=out)
-        print("  → In Raycast: add this folder under Extensions ▸ Script Commands,",
-              file=out)
-        print("    then assign a hotkey to 'whereami peek'.", file=out)
-
-
-def _prompt_install_tool(out) -> Optional[str]:
-    print("\nNo hotkey tool found. Install one to enable the ⌥W peek hotkey?",
-          file=out)
-    print("  [1] Hammerspoon  (recommended — fully wires ⌥W, no extra clicks)",
-          file=out)
-    print("  [2] Raycast", file=out)
-    print("  [3] Skip", file=out)
-    try:
-        answer = input("Choice [1/2/3]: ").strip()
-    except EOFError:
-        return None
-    return {"1": "hammerspoon", "2": "raycast"}.get(answer)
-
-
-def _brew_install(cask: str, out, *, yes: bool) -> None:
-    if not shutil.which("brew"):
-        print("  Homebrew not found. Install {} from its website, then re-run "
-              "`whereami install`.".format(cask), file=out)
-        return
-    if not yes:
-        try:
-            if input("Run `brew install --cask {}`? [y/N]: ".format(cask)
-                     ).strip().lower() not in ("y", "yes"):
-                return
-        except EOFError:
-            return
-    subprocess.run(["brew", "install", "--cask", cask], check=False)
-
-
-def _reload_hammerspoon(out, runner=subprocess.run, which=shutil.which) -> None:
-    """Reload via the `hs` CLI when it works; otherwise (no CLI, or the reload
-    errors because Hammerspoon isn't running with the ipc module) fall back to
-    the manual hint rather than leaking the raw subprocess error."""
-    if which("hs"):
-        proc = runner(["hs", "-c", "hs.reload()"],
-                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if getattr(proc, "returncode", 1) == 0:
-            print("  → Hammerspoon reloaded.", file=out)
-            return
-    print("  → Reload Hammerspoon (⌃⌥⌘R) to activate the hotkey.", file=out)
 
 
 if __name__ == "__main__":

@@ -60,7 +60,17 @@ def test_console_install_uses_sibling_bin_scripts():
 # --- settings.json patching (the risky part) ----------------------------
 
 def _block(cmd):
-    return {"type": "command", "command": cmd, "refreshInterval": 1}
+    return {"type": "command", "command": cmd}
+
+
+def test_pre_04_refresh_interval_is_dropped_on_reinstall():
+    # 0.3 wired refreshInterval: 1 for the peek panel; reinstalling removes it.
+    cmd = 'python3 "/x/scripts/statusline.py"'
+    current = {"statusLine": {"type": "command", "command": cmd, "refreshInterval": 1}}
+    new, report = install.compute_settings_update(
+        current, statusline_cmd=cmd, hook_cmd=None, force=False)
+    assert new["statusLine"] == _block(cmd)
+    assert report["statusline"] == "set"
 
 
 def test_statusline_set_on_empty_settings():
@@ -188,92 +198,6 @@ def test_backup_noop_when_missing(tmp_path):
 
 # --- hotkey detection ----------------------------------------------------
 
-def test_detect_hammerspoon_via_app(tmp_path):
-    exists = lambda p: p == "/Applications/Hammerspoon.app"
-    assert install.detect_hotkey_tool(tmp_path, path_exists=exists) == "hammerspoon"
-
-
-def test_detect_hammerspoon_via_init_lua(tmp_path):
-    init = tmp_path / ".hammerspoon" / "init.lua"
-    exists = lambda p: p == str(init)
-    assert install.detect_hotkey_tool(tmp_path, path_exists=exists) == "hammerspoon"
-
-
-def test_detect_raycast(tmp_path):
-    exists = lambda p: p == "/Applications/Raycast.app"
-    assert install.detect_hotkey_tool(tmp_path, path_exists=exists) == "raycast"
-
-
-def test_detect_none(tmp_path):
-    assert install.detect_hotkey_tool(tmp_path, path_exists=lambda p: False) is None
-
-
-def test_hammerspoon_preferred_over_raycast_when_both(tmp_path):
-    assert install.detect_hotkey_tool(tmp_path, path_exists=lambda p: True) == "hammerspoon"
-
-
-# --- hotkey choice decision ---------------------------------------------
-
-def test_decide_auto_uses_detected():
-    assert install.decide_hotkey(detected="raycast", requested="auto") == "raycast"
-
-
-def test_decide_auto_with_nothing_detected_means_prompt():
-    assert install.decide_hotkey(detected=None, requested="auto") == "prompt"
-
-
-def test_decide_explicit_flag_overrides_detection():
-    assert install.decide_hotkey(detected="hammerspoon", requested="none") == "none"
-    assert install.decide_hotkey(detected=None, requested="hammerspoon") == "hammerspoon"
-
-
-def test_decide_no_input_never_prompts():
-    # With --no-input and nothing detected, we skip rather than block on a prompt.
-    assert install.decide_hotkey(detected=None, requested="auto",
-                                 no_input=True) == "none"
-
-
-# --- hammerspoon wiring --------------------------------------------------
-
-def test_wire_hammerspoon_appends_marked_binding(tmp_path):
-    init = tmp_path / ".hammerspoon" / "init.lua"
-    result = install.wire_hammerspoon(init, peek_path="/home/u/.claude/whereami/peek")
-    assert result == "added"
-    text = init.read_text()
-    assert install.HS_MARKER in text
-    assert "/home/u/.claude/whereami/peek" in text
-    assert 'hs.hotkey.bind' in text and '"alt"' in text and '"W"' in text
-
-
-def test_wire_hammerspoon_is_idempotent(tmp_path):
-    init = tmp_path / ".hammerspoon" / "init.lua"
-    install.wire_hammerspoon(init, peek_path="/p")
-    before = init.read_text()
-    assert install.wire_hammerspoon(init, peek_path="/p") == "already"
-    assert init.read_text() == before  # no duplicate append
-
-
-def test_wire_hammerspoon_preserves_existing_config(tmp_path):
-    init = tmp_path / ".hammerspoon" / "init.lua"
-    init.parent.mkdir(parents=True)
-    init.write_text('hs.alert.show("hi")\n')
-    install.wire_hammerspoon(init, peek_path="/p")
-    assert 'hs.alert.show("hi")' in init.read_text()
-
-
-# --- raycast wiring ------------------------------------------------------
-
-def test_wire_raycast_writes_executable_script(tmp_path):
-    script = install.wire_raycast(tmp_path / "scripts", peek_path="/home/u/peek")
-    assert script.exists()
-    body = script.read_text()
-    assert "@raycast.title whereami peek" in body
-    assert "touch /home/u/peek" in body
-    assert os.access(script, os.X_OK)  # chmod +x so Raycast can run it
-
-
-# --- main() orchestration ------------------------------------------------
-
 def _fake_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     return tmp_path
@@ -282,25 +206,23 @@ def _fake_home(tmp_path, monkeypatch):
 def test_main_dry_run_writes_nothing(tmp_path, monkeypatch):
     home = _fake_home(tmp_path, monkeypatch)
     scripts = Path("/clone/scripts")
-    rc = install.main(["--dry-run", "--hotkey", "none"], scripts_dir=scripts)
+    rc = install.main(["--dry-run"], scripts_dir=scripts)
     assert rc == 0
     assert not (home / ".claude" / "settings.json").exists()
     assert not (home / ".claude" / "whereami").exists()
 
 
-def test_main_wires_statusline_and_creates_peek_dir(tmp_path, monkeypatch):
+def test_main_wires_statusline_and_hook(tmp_path, monkeypatch):
     home = _fake_home(tmp_path, monkeypatch)
     scripts = Path("/clone/scripts")
-    rc = install.main(["--hotkey", "none"], scripts_dir=scripts,
-                      warm=lambda out: None)
+    rc = install.main([], scripts_dir=scripts)
     assert rc == 0
     settings = json.loads((home / ".claude" / "settings.json").read_text())
     assert settings["statusLine"]["command"] == 'python3 "/clone/scripts/statusline.py"'
-    assert settings["statusLine"]["refreshInterval"] == 1
+    assert "refreshInterval" not in settings["statusLine"]
     # clone install (non-plugin) also wires the Stop hook
     cmds = [h["command"] for g in settings["hooks"]["Stop"] for h in g["hooks"]]
     assert 'python3 "/clone/scripts/hook.py"' in cmds
-    assert (home / ".claude" / "whereami").is_dir()
 
 
 def test_main_backs_up_existing_settings_before_writing(tmp_path, monkeypatch):
@@ -308,62 +230,7 @@ def test_main_backs_up_existing_settings_before_writing(tmp_path, monkeypatch):
     settings = home / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True)
     settings.write_text('{"theme": "dark"}')
-    install.main(["--hotkey", "none"], scripts_dir=Path("/clone/scripts"),
-                 warm=lambda out: None)
+    install.main([], scripts_dir=Path("/clone/scripts"))
     backup = settings.with_name("settings.json.bak-whereami")
     assert json.loads(backup.read_text()) == {"theme": "dark"}  # original preserved
     assert json.loads(settings.read_text())["theme"] == "dark"  # and carried forward
-
-
-# --- hammerspoon reload (graceful fallback) ------------------------------
-
-def test_main_warms_capability_probe(tmp_path, monkeypatch):
-    _fake_home(tmp_path, monkeypatch)
-    called = []
-    install.main(["--hotkey", "none"], scripts_dir=Path("/clone/scripts"),
-                 warm=lambda out: called.append(True))
-    assert called == [True]
-
-
-def test_main_dry_run_does_not_warm(tmp_path, monkeypatch):
-    _fake_home(tmp_path, monkeypatch)
-    called = []
-    install.main(["--dry-run", "--hotkey", "none"], scripts_dir=Path("/clone/scripts"),
-                 warm=lambda out: called.append(True))
-    assert called == []
-
-
-def test_warm_capabilities_never_raises(monkeypatch):
-    from whereami import drift
-
-    def boom():
-        raise RuntimeError("probe blew up")
-
-    monkeypatch.setattr(drift, "_stripped_supported", boom)
-    out = io.StringIO()
-    install._warm_capabilities(out)   # must not raise
-    assert "skipped" in out.getvalue()
-
-
-def test_reload_falls_back_to_manual_hint_when_cli_errors():
-    # `hs` exists but the reload fails (Hammerspoon not running / no ipc) — show
-    # the manual ⌃⌥⌘R hint instead of leaking the raw subprocess error.
-    out = io.StringIO()
-    install._reload_hammerspoon(out, runner=lambda *a, **k: _Proc(1),
-                                which=lambda n: "/usr/local/bin/hs")
-    assert "⌃⌥⌘R" in out.getvalue()
-
-
-def test_reload_reports_success_quietly():
-    out = io.StringIO()
-    install._reload_hammerspoon(out, runner=lambda *a, **k: _Proc(0),
-                                which=lambda n: "/usr/local/bin/hs")
-    assert "reloaded" in out.getvalue().lower()
-    assert "⌃⌥⌘R" not in out.getvalue()
-
-
-def test_reload_without_cli_gives_manual_hint():
-    out = io.StringIO()
-    install._reload_hammerspoon(out, runner=lambda *a, **k: _Proc(0),
-                                which=lambda n: None)
-    assert "⌃⌥⌘R" in out.getvalue()
