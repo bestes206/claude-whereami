@@ -310,3 +310,13 @@ def test_is_headless(tmp_path):
     _write(p, [_user("hi")])                      # old transcript, no entrypoint
     assert transcript.is_headless(str(p)) is False
     assert transcript.is_headless(str(tmp_path / "missing.jsonl")) is True
+
+
+def test_pasted_content_wrapper_is_stripped():
+    # Seen 2026-11-25: a fully pasted message showed `<pasted_content id="acba">` on line 2.
+    entry = _user('\n\n<pasted_content id="acba">\nI\'d assume for B Mini then merge\n'
+                  '</pasted_content id="acba">\n', origin={"kind": "human"})
+    assert transcript.human_text(entry) == "I'd assume for B Mini then merge"
+    mixed = _user('<pasted_content id="x1">\nlog line\n</pasted_content id="x1">\n'
+                  "why does this fail?", origin={"kind": "human"})
+    assert transcript.human_text(mixed) == "log line\n\nwhy does this fail?"

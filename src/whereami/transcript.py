@@ -8,6 +8,9 @@ from . import cache
 _REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 _COMMAND_RE = re.compile(r"<command-[a-z]+>.*?</command-[a-z]+>", re.DOTALL)
 _BASH_INPUT_RE = re.compile(r"^<bash-input>(.*?)</bash-input>$", re.DOTALL)
+# Pasted text arrives wrapped in <pasted_content id="..."> ... </pasted_content id="...">;
+# it is the user's own message, so keep the text and drop the wrapper.
+_PASTE_TAG_RE = re.compile(r"</?pasted_content\b[^>]*>")
 
 # Harness-written text that arrives as a "user" entry. Transcripts from CLI
 # ~2.1.33x mark the sender in `origin`; these prefixes cover older ones.
@@ -27,6 +30,7 @@ MAX_SCAN_BYTES = 8 * 1024 * 1024
 def _strip_injected(text: str) -> str:
     text = _REMINDER_RE.sub("", text)
     text = _COMMAND_RE.sub("", text)
+    text = _PASTE_TAG_RE.sub("", text)
     return text.strip()
 
 
